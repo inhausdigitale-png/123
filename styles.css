@@ -44,6 +44,122 @@ button {
   cursor: pointer;
 }
 
+.login-screen {
+  min-height: 100vh;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background:
+    linear-gradient(135deg, rgba(25, 61, 71, 0.94), rgba(15, 118, 110, 0.88)),
+    linear-gradient(180deg, #e7f0e7 0, #f3f6f2 100%);
+}
+
+.auth-locked .login-screen {
+  display: flex;
+}
+
+.auth-locked .app-header,
+.auth-locked .app-shell {
+  display: none;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 60px rgba(7, 25, 31, 0.26);
+}
+
+.login-card h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 30px;
+  letter-spacing: 0;
+}
+
+.login-copy {
+  margin: 8px 0 24px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.auth-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.auth-toggle button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.auth-toggle button.is-active {
+  background: #fff;
+  color: var(--blue);
+  box-shadow: 0 8px 18px rgba(32, 42, 47, 0.1);
+}
+
+.login-card label {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.login-card .signup-only {
+  display: none;
+}
+
+.auth-signup .login-card .signup-only {
+  display: grid;
+}
+
+.login-card input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 11px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.login-card input:focus {
+  outline: 3px solid rgba(15, 118, 110, 0.18);
+  border-color: var(--teal);
+}
+
+.login-error {
+  min-height: 18px;
+  margin: 2px 0 14px;
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.login-button {
+  width: 100%;
+  min-height: 44px;
+  justify-content: center;
+}
+
 .app-header {
   min-height: 88px;
   display: flex;
@@ -98,7 +214,6 @@ button {
 .ghost-button,
 .danger-button,
 .tab,
-.tab-select-wrap,
 .icon-button {
   min-height: 38px;
   border: 1px solid transparent;
@@ -141,8 +256,10 @@ button {
 
 .tabs {
   display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
+  overflow: visible;
   padding: 8px;
   margin-bottom: 12px;
   border: 1px solid rgba(25, 61, 71, 0.08);
@@ -158,33 +275,124 @@ button {
   white-space: nowrap;
 }
 
-.tab-select-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.tab-menu {
+  position: relative;
+  --menu-items: 4;
+}
+
+#creativeMenu {
+  --menu-items: 2;
+}
+
+.tab-menu summary {
+  position: relative;
+  min-height: 38px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 34px 9px 14px;
   background: #f8faf5;
   color: var(--muted);
-  border-color: var(--line);
+  font-weight: 800;
+  cursor: pointer;
   white-space: nowrap;
 }
 
-.tab-select-wrap span {
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
+.tab-menu summary::-webkit-details-marker {
+  display: none;
 }
 
-.tab-select {
-  min-height: 26px;
+.tab-menu summary::after {
+  content: "v";
+  position: absolute;
+  right: 13px;
+  top: 10px;
+  color: currentColor;
+  font-size: 12px;
+}
+
+.tab-menu[open] summary::after {
+  content: "^";
+}
+
+.tab-menu button {
+  display: none;
+  width: 100%;
+  min-height: 36px;
   border: 0;
-  background: transparent;
-  color: inherit;
-  font-weight: 800;
-  outline: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 12px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tab-menu button:last-child {
+  border-bottom: 0;
+}
+
+.tab-menu button:hover {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
+.tab-menu[open] {
+  z-index: 10;
+}
+
+.tab-menu[open]::after {
+  content: "";
+  position: absolute;
+  z-index: 11;
+  top: calc(100% + 7px);
+  left: 0;
+  width: 230px;
+  height: calc(var(--menu-items, 4) * 36px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.tab-menu[open] button {
+  display: block;
+  position: relative;
+  z-index: 12;
+  top: 0;
+  width: 230px;
+}
+
+.tab-menu[open] button {
+  position: absolute;
+  left: 0;
+}
+
+.tab-menu[open] button:nth-of-type(1) {
+  top: calc(100% + 7px);
+  border-radius: 8px 8px 0 0;
+}
+
+.tab-menu[open] button:nth-of-type(2) {
+  top: calc(100% + 43px);
+}
+
+.tab-menu[open] button:nth-of-type(3) {
+  top: calc(100% + 79px);
+}
+
+.tab-menu[open] button:nth-of-type(4) {
+  top: calc(100% + 115px);
+  border-radius: 0 0 8px 8px;
+}
+
+#creativeMenu[open] button:nth-of-type(2) {
+  border-radius: 0 0 8px 8px;
 }
 
 .tab.is-active,
-.tab-select-wrap.is-active {
+.tab-menu.is-active summary {
   background: #193d47;
   color: var(--blue);
   border-color: #193d47;
@@ -666,6 +874,33 @@ textarea:focus {
   margin-top: 18px;
   border-top: 1px solid var(--line);
   padding-top: 16px;
+}
+
+.cloud-sync-panel {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.cloud-sync-panel label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cloud-sync-panel .check-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  min-height: 38px;
+  text-transform: none;
+}
+
+.cloud-sync-panel .check-row input {
+  width: auto;
 }
 
 .import-panel {

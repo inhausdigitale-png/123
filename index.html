@@ -6,7 +6,33 @@
     <title>Campaign Log</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
+  <body class="auth-locked">
+    <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
+      <form class="login-card" id="loginForm">
+        <p class="eyebrow">Secure workspace</p>
+        <h1 id="loginTitle">Campaign Log</h1>
+        <p class="login-copy" id="loginCopy">Sign in to open your campaign dashboard.</p>
+        <div class="auth-toggle" role="tablist" aria-label="Account action">
+          <button class="is-active" id="signinMode" type="button">Sign in</button>
+          <button id="signupMode" type="button">Sign up</button>
+        </div>
+        <label>
+          User name
+          <input id="loginName" type="text" autocomplete="username" placeholder="Enter user name" required />
+        </label>
+        <label>
+          Password
+          <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter password" required />
+        </label>
+        <label class="signup-only" id="confirmPasswordWrap">
+          Confirm password
+          <input id="confirmPassword" type="password" autocomplete="new-password" placeholder="Confirm password" />
+        </label>
+        <p class="login-error" id="loginError" role="alert"></p>
+        <button class="primary-button login-button" id="loginSubmit" type="submit">Sign in</button>
+      </form>
+    </section>
+
     <header class="app-header">
       <div>
         <p class="eyebrow">Performance operations</p>
@@ -24,31 +50,28 @@
         <button class="danger-button" id="resetData" type="button" title="Restore sample data">
           Reset
         </button>
+        <button class="ghost-button" id="logoutButton" type="button" title="Close dashboard">
+          Logout
+        </button>
       </div>
     </header>
 
     <main class="app-shell">
       <nav class="tabs" aria-label="Campaign sections">
         <button class="tab is-active" data-tab="dashboard" type="button">Dashboard</button>
-        <label class="tab-select-wrap">
-          <span>Campaign</span>
-          <select class="tab-select" id="campaignMenu" aria-label="Campaign tools">
-            <option value="">Select campaign tool</option>
-            <option value="tracker">Campaign Tracker</option>
-            <option value="targets">Target Budget</option>
-            <option value="changes">Change Log</option>
-            <option value="reviews">Review Queue</option>
-          </select>
-        </label>
+        <details class="tab-menu" id="campaignMenu">
+          <summary>Campaign</summary>
+          <button type="button" data-tab="tracker">Campaign Tracker</button>
+          <button type="button" data-tab="targets">Target Budget</button>
+          <button type="button" data-tab="changes">Change Log</button>
+          <button type="button" data-tab="reviews">Review Queue</button>
+        </details>
         <button class="tab" data-tab="portal" type="button">Portal Report</button>
-        <label class="tab-select-wrap">
-          <span>Creative</span>
-          <select class="tab-select" id="creativeMenu" aria-label="Creative tools">
-            <option value="">Select creative tool</option>
-            <option value="creatives">Creative Entry</option>
-            <option value="creativePerformance">Creative Performance</option>
-          </select>
-        </label>
+        <details class="tab-menu" id="creativeMenu">
+          <summary>Creative</summary>
+          <button type="button" data-tab="creatives">Creative Entry</button>
+          <button type="button" data-tab="creativePerformance">Creative Performance</button>
+        </details>
         <button class="tab" data-tab="settings" type="button">Settings</button>
       </nav>
 
@@ -602,6 +625,26 @@
             <span>Choose which columns appear in Campaign Tracker</span>
           </div>
           <div class="column-settings" id="trackerColumnSettings"></div>
+        </div>
+
+        <div class="settings-block">
+          <div class="surface-head">
+            <h3>Cloud Drive Sync</h3>
+            <span>Use this so all laptops see the same saved data</span>
+          </div>
+          <div class="cloud-sync-panel">
+            <label>
+              Google Apps Script Web App URL
+              <input id="driveSyncUrl" type="url" placeholder="Paste your Google sync URL here" />
+            </label>
+            <label class="check-row">
+              <input id="autoCloudSync" type="checkbox" />
+              Auto save to cloud after changes
+            </label>
+            <button class="primary-button" id="saveCloudData" type="button">Save Cloud Now</button>
+            <button class="ghost-light-button" id="loadCloudData" type="button">Load Cloud Data</button>
+          </div>
+          <p class="import-status" id="cloudSyncStatus"></p>
         </div>
 
         <div class="settings-block">

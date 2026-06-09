@@ -1,4 +1,11 @@
 const STORAGE_KEY = "campaign-log-web-app-v1";
+const AUTH_KEY = "campaign-log-login-v1";
+const USERS_KEY = "campaign-log-users-v1";
+const CLOUD_SYNC_DELAY = 1200;
+const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/a/macros/adissia.com/s/AKfycbwlcE75v-fcBtEmAJgjCaNKz_ryt40acncnhfL8zjNsHFmR5dieRm3NeoQnfI44uwPE/exec";
+let authMode = "signin";
+let cloudSyncTimer;
+let isLoadingCloud = false;
 
 const platformOptions = ["Meta", "Google", "YouTube", "LinkedIn", "TikTok", "Email", "Other"];
 const statusOptions = ["Active", "Learning", "Needs Action", "Paused", "Scaled", "Testing", "Completed", "On Hold"];
@@ -54,7 +61,7 @@ const importTemplates = {
   ],
   targetWeekly: ["Month", "Week", "Project", "Medium", "Spend", "Total Lead Achieved", "Digital Lead Achieved", "BTL Lead Achieved", "Lead Allocation", "Site Visit", "Booking"],
   portal: ["Date", "Portal", "Project", "Generated", "SVS", "SVC", "Generated Walk-in", "Gross Nos", "Net Nos"],
-  creatives: ["Date", "Project", "Campaign Name", "Ad Set Name", "Creative Name", "Creative Type", "Platform", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Status", "Remarks"],
+  creatives: ["Date", "Project", "Campaign ID", "Campaign Name", "Ad Set Name", "Creative Name", "Creative Type", "Platform", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Status", "Remarks"],
 };
 
 const sampleState = {
@@ -92,6 +99,8 @@ const sampleState = {
     minCvr: 2,
     reviewDays: 3,
     warningSpend: 1000,
+    driveSyncUrl: "",
+    autoCloudSync: false,
   },
   campaigns: [
     {
@@ -234,8 +243,8 @@ const sampleState = {
     { date: "2026-05-03", month: "2026-05", portal: "Magicbricks", project: "Vivaana", generated: 9, svs: 1, svc: 1, walkin: 0, gross: 0, net: 0 },
   ],
   creatives: [
-    { id: "CRT-001", date: "2026-06-01", project: "Main Project", campaignName: "Summer Lead Gen", adsetName: "Core Lead Audience", creativeName: "Blue Offer Static", creativeType: "Static", platform: "Meta", spend: 1800, impressions: 42000, clicks: 710, leads: 36, svc: 12, booked: 4, status: "Active", remarks: "Best CPL so far", imageData: "" },
-    { id: "CRT-002", date: "2026-06-02", project: "Main Project", campaignName: "Retargeting Sales", adsetName: "Search Retargeting", creativeName: "Walkthrough Video", creativeType: "Video", platform: "Google", spend: 2600, impressions: 39000, clicks: 620, leads: 28, svc: 10, booked: 3, status: "Testing", remarks: "Needs more spend before decision", imageData: "" },
+    { id: "CRT-001", date: "2026-06-01", campaignId: "CMP-001", project: "Main Project", campaignName: "Summer Lead Gen", adsetName: "Core Lead Audience", creativeName: "Blue Offer Static", creativeType: "Static", platform: "Meta", spend: 1800, impressions: 42000, clicks: 710, leads: 36, svc: 12, booked: 4, status: "Active", remarks: "Best CPL so far", imageData: "" },
+    { id: "CRT-002", date: "2026-06-02", campaignId: "CMP-002", project: "Main Project", campaignName: "Retargeting Sales", adsetName: "Search Retargeting", creativeName: "Walkthrough Video", creativeType: "Video", platform: "Google", spend: 2600, impressions: 39000, clicks: 620, leads: 28, svc: 10, booked: 3, status: "Testing", remarks: "Needs more spend before decision", imageData: "" },
   ],
 };
 
@@ -319,11 +328,29 @@ function normalizeState(nextState) {
       name: metric.name,
       direction: metric.direction === "lower" ? "lower" : "higher",
     }));
+  nextState.settings = {
+    ...structuredClone(sampleState.settings),
+    ...(nextState.settings || {}),
+    autoCloudSync: Boolean(nextState.settings?.autoCloudSync),
+    driveSyncUrl: nextState.settings?.driveSyncUrl || "",
+  };
   const hasOldTargetFormat = (nextState.targets || []).some((row) => row.totalTarget !== undefined && row.medium === undefined);
   if (hasOldTargetFormat) nextState.targets = structuredClone(sampleState.targets);
   nextState.targets = (nextState.targets || []).map((row) => normalizeTargetRow(row));
   nextState.portalRows = (nextState.portalRows || []).map((row) => normalizePortalRow(row));
-  nextState.creatives = (nextState.creatives || []).map((row) => normalizeCreativeRow(row));
+  nextState.creatives = (nextState.creatives || []).map((row) => {
+    const creative = normalizeCreativeRow(row);
+    const campaign = findCampaignForCreative(creative, nextState.campaigns);
+    if (!campaign) return creative;
+    return {
+      ...creative,
+      campaignId: campaign.id,
+      campaignName: campaign.name,
+      project: campaign.project,
+      adsetName: campaign.adsetName,
+      platform: campaign.platform || creative.platform,
+    };
+  });
   return nextState;
 }
 
@@ -347,6 +374,7 @@ function normalizeCreativeRow(row) {
   return {
     id: row.id || row.creativeId || `CRT-${crypto.randomUUID().slice(0, 8)}`,
     date: row.date || todayIso(),
+    campaignId: row.campaignId || "",
     project: row.project || "Main Project",
     campaignName: row.campaignName || row.name || "",
     adsetName: row.adsetName || "",
@@ -407,6 +435,7 @@ function normalizeTargetWeek(week = {}) {
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   showSaveStatus("Saved");
+  scheduleCloudSave();
 }
 
 function showSaveStatus(message) {
@@ -417,6 +446,86 @@ function showSaveStatus(message) {
   saveStatusTimer = setTimeout(() => {
     status.textContent = "Saved";
   }, 1600);
+}
+
+function cleanCloudUrl() {
+  return (HARDCODED_DRIVE_SYNC_URL || state.settings.driveSyncUrl || "").trim();
+}
+
+function setCloudStatus(message) {
+  const status = document.querySelector("#cloudSyncStatus");
+  if (status) status.textContent = message;
+}
+
+function scheduleCloudSave() {
+  if (isLoadingCloud || !state.settings.autoCloudSync || !cleanCloudUrl()) return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => {
+    saveCloudState();
+  }, CLOUD_SYNC_DELAY);
+}
+
+async function saveCloudState() {
+  const url = cleanCloudUrl();
+  if (!url) {
+    setCloudStatus("Paste your Google Apps Script URL first.");
+    return;
+  }
+  const payload = {
+    action: "save",
+    savedAt: new Date().toISOString(),
+    data: state,
+  };
+  try {
+    await fetch(url, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    showSaveStatus("Cloud saved");
+    setCloudStatus("Cloud save sent. Open another laptop and use Load Cloud Data.");
+  } catch (error) {
+    setCloudStatus(`Cloud save failed: ${error.message}`);
+  }
+}
+
+function loadCloudState() {
+  const url = cleanCloudUrl();
+  if (!url) {
+    setCloudStatus("Paste your Google Apps Script URL first.");
+    return;
+  }
+  const callbackName = `campaignLogCloudLoad_${Date.now()}`;
+  const script = document.createElement("script");
+  const joiner = url.includes("?") ? "&" : "?";
+  setCloudStatus("Loading cloud data...");
+  window[callbackName] = (response) => {
+    try {
+      if (!response?.ok || !response.data) throw new Error(response?.error || "No cloud data found");
+      isLoadingCloud = true;
+      const currentSettings = { ...state.settings };
+      state = normalizeState({ ...structuredClone(sampleState), ...response.data });
+      state.settings = { ...state.settings, ...currentSettings };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      render();
+      setCloudStatus(`Loaded cloud data saved on ${response.savedAt || "Drive"}.`);
+      showSaveStatus("Cloud loaded");
+    } catch (error) {
+      setCloudStatus(`Cloud load failed: ${error.message}`);
+    } finally {
+      isLoadingCloud = false;
+      script.remove();
+      delete window[callbackName];
+    }
+  };
+  script.onerror = () => {
+    setCloudStatus("Cloud load failed. Check the URL and Apps Script access.");
+    script.remove();
+    delete window[callbackName];
+  };
+  script.src = `${url}${joiner}action=load&callback=${callbackName}&t=${Date.now()}`;
+  document.body.append(script);
 }
 
 function money(value) {
@@ -471,6 +580,23 @@ function matchesProject(row) {
 
 function campaignName(campaignId) {
   return state.campaigns.find((campaign) => campaign.id === campaignId)?.name || "";
+}
+
+function campaignById(campaignId, campaigns = state.campaigns) {
+  return campaigns.find((campaign) => campaign.id === campaignId);
+}
+
+function findCampaignForCreative(row, campaigns = state.campaigns) {
+  if (row.campaignId) {
+    const byId = campaigns.find((campaign) => campaign.id === row.campaignId);
+    if (byId) return byId;
+  }
+  const name = (row.campaignName || "").trim().toLowerCase();
+  if (!name) return campaigns[0];
+  return campaigns.find((campaign) => (
+    (campaign.name || "").trim().toLowerCase() === name &&
+    (!row.project || campaign.project === row.project)
+  )) || campaigns.find((campaign) => (campaign.name || "").trim().toLowerCase() === name);
 }
 
 function campaignProject(campaignId) {
@@ -630,6 +756,19 @@ function select(value, options, onChange) {
   return node;
 }
 
+function selectPairs(value, options, onChange) {
+  const node = document.createElement("select");
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    node.append(item);
+  });
+  node.value = options.some((option) => option.value === value) ? value : options[0]?.value || "";
+  node.addEventListener("change", (event) => onChange(event.target.value));
+  return node;
+}
+
 function td(child, className = "") {
   const cell = document.createElement("td");
   if (className) cell.className = className;
@@ -686,6 +825,15 @@ function updateTarget(index, key, value) {
 function updateCreative(index, key, value) {
   const numeric = ["spend", "impressions", "clicks", "leads", "svc", "booked"];
   state.creatives[index][key] = numeric.includes(key) ? numberValue(value) : value;
+  if (key === "campaignId") {
+    const campaign = campaignById(value);
+    if (campaign) {
+      state.creatives[index].campaignName = campaign.name;
+      state.creatives[index].project = campaign.project;
+      state.creatives[index].adsetName = campaign.adsetName;
+      state.creatives[index].platform = campaign.platform || state.creatives[index].platform;
+    }
+  }
   saveState();
   render();
 }
@@ -1105,8 +1253,8 @@ function creativeStats(row) {
 }
 
 function creativeFilterOptions() {
-  const projects = ["All Projects", ...new Set(state.creatives.map((row) => row.project).filter(Boolean))];
-  const campaigns = ["All Campaigns", ...new Set(state.creatives.map((row) => row.campaignName).filter(Boolean))];
+  const projects = ["All Projects", ...new Set(state.campaigns.map((row) => row.project).filter(Boolean))];
+  const campaigns = ["All Campaigns", ...new Set(state.campaigns.map((row) => row.name).filter(Boolean))];
   const types = ["All Types", ...new Set(state.creatives.map((row) => row.creativeType).filter(Boolean))];
   return { projects, campaigns, types };
 }
@@ -1201,14 +1349,22 @@ function renderCreativeRows() {
   body.innerHTML = "";
   rows.forEach((row) => {
     const index = state.creatives.indexOf(row);
+    const campaign = campaignById(row.campaignId) || findCampaignForCreative(row);
+    if (campaign && row.campaignId !== campaign.id) {
+      row.campaignId = campaign.id;
+      row.campaignName = campaign.name;
+      row.project = campaign.project;
+      row.adsetName = campaign.adsetName;
+      row.platform = campaign.platform || row.platform;
+    }
     const stats = creativeStats(row);
     const tr = document.createElement("tr");
     tr.append(
       td(creativeImageControl(row, index), "creative-image-cell"),
       td(input(row.date, "date", (value) => updateCreative(index, "date", value))),
-      td(select(row.project, projectOptions(), (value) => updateCreative(index, "project", value)), "wide"),
-      td(input(row.campaignName, "text", (value) => updateCreative(index, "campaignName", value)), "wide"),
-      td(input(row.adsetName, "text", (value) => updateCreative(index, "adsetName", value)), "wide"),
+      td(row.project || "-", "calc-cell wide"),
+      td(selectPairs(row.campaignId, campaignSelectOptions(), (value) => updateCreative(index, "campaignId", value)), "wide"),
+      td(row.adsetName || "-", "calc-cell wide"),
       td(input(row.creativeName, "text", (value) => updateCreative(index, "creativeName", value)), "wide"),
       td(select(row.creativeType, ["Static", "Video", "Carousel", "Reel", "Story", "Banner", "Other"], (value) => updateCreative(index, "creativeType", value))),
       td(select(row.platform, platformOptions, (value) => updateCreative(index, "platform", value))),
@@ -1438,6 +1594,16 @@ function portalPeriodDetails(date, view) {
 function campaignOptions() {
   const ids = state.campaigns.map((row) => row.id).filter(Boolean);
   return ids.length ? ids : ["No Campaign"];
+}
+
+function campaignSelectOptions() {
+  const options = state.campaigns
+    .filter((row) => row.id)
+    .map((row) => ({
+      value: row.id,
+      label: `${row.id} - ${row.name || "Unnamed campaign"}`,
+    }));
+  return options.length ? options : [{ value: "", label: "Add campaign in Campaign Tracker first" }];
 }
 
 function projectOptions() {
@@ -1773,8 +1939,16 @@ function renderReviews() {
 function renderSettings() {
   Object.entries(state.settings).forEach(([key, value]) => {
     const field = document.querySelector(`#${key}`);
-    if (field && document.activeElement !== field) field.value = value;
+    if (!field || document.activeElement === field) return;
+    if (field.type === "checkbox") field.checked = Boolean(value);
+    else field.value = value;
   });
+  const syncField = document.querySelector("#driveSyncUrl");
+  if (syncField && HARDCODED_DRIVE_SYNC_URL) {
+    syncField.value = HARDCODED_DRIVE_SYNC_URL;
+    syncField.readOnly = true;
+    syncField.placeholder = "Cloud URL is built into this app";
+  }
   renderProjectSettings();
   renderMetricSettings();
   renderTrackerColumnSettings();
@@ -1938,15 +2112,103 @@ function setActiveTab(tabId) {
   const panel = document.querySelector(`#${tabId}`);
   if (!panel) return;
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("is-active"));
-  document.querySelectorAll(".tab-select-wrap").forEach((wrap) => wrap.classList.remove("is-active"));
-  document.querySelectorAll(".panel").forEach((item) => item.classList.remove("is-active"));
-  document.querySelectorAll(".tab-select").forEach((selectNode) => {
-    selectNode.value = [...selectNode.options].some((option) => option.value === tabId) ? tabId : "";
+  document.querySelectorAll(".tab-menu").forEach((menu) => {
+    menu.classList.remove("is-active");
+    menu.removeAttribute("open");
   });
+  document.querySelectorAll(".panel").forEach((item) => item.classList.remove("is-active"));
   if (button) button.classList.add("is-active");
-  const activeSelect = document.querySelector(`.tab-select option[value="${tabId}"]`)?.closest("select");
-  activeSelect?.closest(".tab-select-wrap")?.classList.add("is-active");
+  document.querySelector(`.tab-menu button[data-tab="${tabId}"]`)?.closest(".tab-menu")?.classList.add("is-active");
   panel.classList.add("is-active");
+}
+
+function showLogin() {
+  document.body.classList.add("auth-locked");
+  document.querySelector("#loginPassword").value = "";
+  document.querySelector("#confirmPassword").value = "";
+  document.querySelector("#loginName").focus();
+}
+
+function showApp() {
+  document.body.classList.remove("auth-locked");
+}
+
+function initLogin() {
+  if (localStorage.getItem(AUTH_KEY)) {
+    showApp();
+    return;
+  }
+  showLogin();
+}
+
+function getUsers() {
+  try {
+    return JSON.parse(localStorage.getItem(USERS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveUsers(users) {
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const isSignup = mode === "signup";
+  document.body.classList.toggle("auth-signup", isSignup);
+  document.querySelector("#signinMode").classList.toggle("is-active", !isSignup);
+  document.querySelector("#signupMode").classList.toggle("is-active", isSignup);
+  document.querySelector("#loginTitle").textContent = isSignup ? "Create account" : "Campaign Log";
+  document.querySelector("#loginCopy").textContent = isSignup
+    ? "Sign up once on this browser, then use Sign in."
+    : "Sign in to open your campaign dashboard.";
+  document.querySelector("#loginSubmit").textContent = isSignup ? "Sign up" : "Sign in";
+  document.querySelector("#loginPassword").autocomplete = isSignup ? "new-password" : "current-password";
+  document.querySelector("#loginError").textContent = "";
+}
+
+function login(event) {
+  event.preventDefault();
+  const name = document.querySelector("#loginName").value.trim();
+  const password = document.querySelector("#loginPassword").value.trim();
+  const confirmPassword = document.querySelector("#confirmPassword").value.trim();
+  const error = document.querySelector("#loginError");
+  if (!name || !password) {
+    error.textContent = "Enter user name and password.";
+    return;
+  }
+  const users = getUsers();
+  const userKey = name.toLowerCase();
+  if (authMode === "signup") {
+    if (password.length < 4) {
+      error.textContent = "Use at least 4 characters for password.";
+      return;
+    }
+    if (password !== confirmPassword) {
+      error.textContent = "Passwords do not match.";
+      return;
+    }
+    if (users[userKey]) {
+      error.textContent = "This user already exists. Please sign in.";
+      return;
+    }
+    users[userKey] = { name, password: btoa(password), createdAt: new Date().toISOString() };
+    saveUsers(users);
+  } else if (!users[userKey] || users[userKey].password !== btoa(password)) {
+    error.textContent = "Account not found or password is wrong.";
+    return;
+  }
+  error.textContent = "";
+  localStorage.setItem(AUTH_KEY, name);
+  showApp();
+  setActiveTab("dashboard");
+}
+
+function logout() {
+  localStorage.removeItem(AUTH_KEY);
+  setActiveTab("dashboard");
+  showLogin();
 }
 
 function addCampaign() {
@@ -2042,13 +2304,19 @@ function resetPortalRows() {
 
 function addCreativeRow() {
   const next = String(state.creatives.length + 1).padStart(3, "0");
+  const campaign = state.campaigns.find((row) => (
+    (state.filters.creativeProject === "All Projects" || row.project === state.filters.creativeProject) &&
+    (state.filters.creativeCampaign === "All Campaigns" || row.name === state.filters.creativeCampaign)
+  )) || state.campaigns[0];
   state.creatives.push(normalizeCreativeRow({
     id: `CRT-${next}`,
     date: todayIso(),
-    project: state.filters.creativeProject !== "All Projects" ? state.filters.creativeProject : "Main Project",
-    campaignName: state.filters.creativeCampaign !== "All Campaigns" ? state.filters.creativeCampaign : "",
+    campaignId: campaign?.id || "",
+    project: campaign?.project || "Main Project",
+    campaignName: campaign?.name || "",
+    adsetName: campaign?.adsetName || "",
     creativeType: state.filters.creativeType !== "All Types" ? state.filters.creativeType : "Static",
-    platform: "Meta",
+    platform: campaign?.platform || "Meta",
   }));
   saveState();
   render();
@@ -2076,12 +2344,22 @@ function handleCreativeImage(index, file) {
 }
 
 function bindEvents() {
+  document.querySelector("#loginForm").addEventListener("submit", login);
+  document.querySelector("#signinMode").addEventListener("click", () => setAuthMode("signin"));
+  document.querySelector("#signupMode").addEventListener("click", () => setAuthMode("signup"));
+  document.querySelector("#logoutButton").addEventListener("click", logout);
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tab));
   });
-  document.querySelectorAll(".tab-select").forEach((selectNode) => {
-    selectNode.addEventListener("change", (event) => {
-      if (event.target.value) setActiveTab(event.target.value);
+  document.querySelectorAll(".tab-menu button").forEach((button) => {
+    button.addEventListener("click", () => setActiveTab(button.dataset.tab));
+  });
+  document.querySelectorAll(".tab-menu").forEach((menu) => {
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      document.querySelectorAll(".tab-menu").forEach((other) => {
+        if (other !== menu) other.removeAttribute("open");
+      });
     });
   });
 
@@ -2281,8 +2559,30 @@ function bindEvents() {
     ["targetCpa", "minRoas", "minCtr", "minCvr", "reviewDays", "warningSpend"].forEach((key) => {
       state.settings[key] = numberValue(document.querySelector(`#${key}`).value);
     });
+    state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
+    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
     saveState();
     render();
+  });
+  document.querySelector("#driveSyncUrl").addEventListener("change", (event) => {
+    state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || event.target.value.trim();
+    saveState();
+  });
+  document.querySelector("#autoCloudSync").addEventListener("change", (event) => {
+    state.settings.autoCloudSync = event.target.checked;
+    saveState();
+  });
+  document.querySelector("#saveCloudData").addEventListener("click", () => {
+    state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
+    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    saveCloudState();
+  });
+  document.querySelector("#loadCloudData").addEventListener("click", () => {
+    state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
+    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    loadCloudState();
   });
   document.querySelector("#exportCsv").addEventListener("click", exportCsv);
 }
@@ -2311,8 +2611,8 @@ function downloadImportTemplate() {
       ["2026-05-01", "Roof&floor", "One world", 0, 0, 0, 0, 0, 0],
     ],
     creatives: [
-      [todayIso(), "Main Project", "Summer Lead Gen", "Core Lead Audience", "Blue Offer Static", "Static", "Meta", 1800, 42000, 710, 36, 12, 4, "Active", "Upload image after import"],
-      [todayIso(), "Main Project", "Retargeting Sales", "Search Retargeting", "Walkthrough Video", "Video", "Google", 2600, 39000, 620, 28, 10, 3, "Testing", "Compare with static creative"],
+      [todayIso(), "Main Project", "CMP-001", "Summer Lead Gen", "Core Lead Audience", "Blue Offer Static", "Static", "Meta", 1800, 42000, 710, 36, 12, 4, "Active", "Upload image after import"],
+      [todayIso(), "Main Project", "CMP-002", "Retargeting Sales", "Search Retargeting", "Walkthrough Video", "Video", "Google", 2600, 39000, 620, 28, 10, 3, "Testing", "Compare with static creative"],
     ],
   };
   download(`${type}-import-template.csv`, [headers, ...exampleRows[type]]);
@@ -2564,15 +2864,25 @@ function importPortalRows(records) {
 
 function importCreativeRows(records) {
   records.forEach((record) => {
+    const importedCampaignId = record["Campaign ID"] || "";
+    const importedCampaignName = (record["Campaign Name"] || record.Campaign || "").trim().toLowerCase();
+    const matchedCampaign = importedCampaignId
+      ? campaignById(importedCampaignId)
+      : state.campaigns.find((campaign) => (
+        (campaign.name || "").trim().toLowerCase() === importedCampaignName &&
+        (!record.Project || campaign.project === record.Project)
+      )) || state.campaigns.find((campaign) => (campaign.name || "").trim().toLowerCase() === importedCampaignName);
+    if (!matchedCampaign) return;
     const row = normalizeCreativeRow({
       id: record["Creative ID"] || "",
       date: record.Date || todayIso(),
-      project: record.Project || "Main Project",
-      campaignName: record["Campaign Name"] || record.Campaign || "",
-      adsetName: record["Ad Set Name"] || "",
+      campaignId: matchedCampaign.id,
+      project: matchedCampaign.project,
+      campaignName: matchedCampaign.name,
+      adsetName: matchedCampaign.adsetName,
       creativeName: record["Creative Name"] || "Creative",
       creativeType: record["Creative Type"] || record.Type || "Static",
-      platform: record.Platform || "Meta",
+      platform: matchedCampaign.platform || record.Platform || "Meta",
       spend: record.Spend,
       impressions: record.Impressions,
       clicks: record.Clicks,
@@ -2741,6 +3051,7 @@ function exportCsv() {
       return [
         row.date,
         row.project,
+        row.campaignId,
         row.campaignName,
         row.adsetName,
         row.creativeName,
@@ -2786,6 +3097,7 @@ function csvCell(value) {
 bindEvents();
 render();
 const params = new URLSearchParams(window.location.search);
-if (params.get("creative") === "1" || params.get("tab") === "creativePerformance") {
-  setActiveTab("creativePerformance");
-}
+const requestedTab = params.get("tab");
+if (requestedTab) setActiveTab(requestedTab);
+else if (params.get("creative") === "1") setActiveTab("creativePerformance");
+initLogin();
