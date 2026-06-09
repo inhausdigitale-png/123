@@ -3,7 +3,7 @@ const AUTH_KEY = "campaign-log-login-v1";
 const USERS_KEY = "campaign-log-users-v1";
 const CLOUD_SYNC_DELAY = 1200;
 const CLOUD_REFRESH_INTERVAL = 60000;
-const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/macros/s/AKfycbwlcE75v-fcBtEmAJgjCaNKz_ryt40acncnhfL8zjNsHFmR5dieRm3NeoQnfI44uwPE/exec";
+const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/macros/s/AKfycbwwV7Ymr4WLaJ43KlLuhf5XjYI7zSzeNK6wJVotEDPZ1C3YbbivXzMEFW2-7jl935oQPA/exec";
 let authMode = "signin";
 let cloudSyncTimer;
 let cloudRefreshTimer;
@@ -533,7 +533,12 @@ function loadCloudState() {
   setCloudStatus("Loading cloud data...");
   window[callbackName] = (response) => {
     try {
-      if (!response?.ok || !response.data) throw new Error(response?.error || "No cloud data found");
+      if (!response?.ok) throw new Error(response?.error || "Cloud data could not be loaded");
+      if (!response.data) {
+        setCloudStatus("Cloud is empty. Creating the first shared team copy now...");
+        saveCloudState();
+        return;
+      }
       isLoadingCloud = true;
       const currentSettings = { ...state.settings };
       state = normalizeState({ ...structuredClone(sampleState), ...response.data });

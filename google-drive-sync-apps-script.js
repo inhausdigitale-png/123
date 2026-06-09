@@ -1,9 +1,16 @@
 const STATE_FILE_ID_KEY = "CAMPAIGN_LOG_STATE_FILE_ID";
 const SAVED_AT_KEY = "CAMPAIGN_LOG_SAVED_AT";
+const REPORT_SPREADSHEET_ID_KEY = "CAMPAIGN_LOG_REPORT_SPREADSHEET_ID";
 const STATE_FILE_NAME = "Campaign Log State.json";
+const REPORT_SPREADSHEET_NAME = "Campaign Log Reports";
 
 function doGet(e) {
   const callback = e.parameter.callback || "callback";
+  if (e.parameter.action === "ping") {
+    return ContentService
+      .createTextOutput(`${callback}(${JSON.stringify({ ok: true, message: "Campaign Log sync is ready" })});`)
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
   const state = readStateFile();
   const savedAt = PropertiesService.getScriptProperties().getProperty(SAVED_AT_KEY);
   const body = JSON.stringify({
@@ -54,7 +61,7 @@ function writeStateFile(data) {
 }
 
 function writeReportSheets(data, savedAt) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = getReportSpreadsheet();
   writeSheet(spreadsheet, "Campaign Tracker", [
     ["Saved At", "Date", "Project", "Campaign ID", "Campaign Name", "Ad Set Name", "Platform", "Status", "Budget", "Spend", "Leads", "SVC", "Booked", "Revenue"],
     ...(data.campaigns || []).map((row) => [
@@ -85,6 +92,16 @@ function writeReportSheets(data, savedAt) {
       row.clicks, row.leads, row.svc, row.booked, row.status, row.imageData ? "Yes" : "No",
     ]),
   ]);
+}
+
+function getReportSpreadsheet() {
+  const props = PropertiesService.getScriptProperties();
+  const existingId = props.getProperty(REPORT_SPREADSHEET_ID_KEY);
+  if (existingId) return SpreadsheetApp.openById(existingId);
+  const activeSpreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = activeSpreadsheet || SpreadsheetApp.create(REPORT_SPREADSHEET_NAME);
+  props.setProperty(REPORT_SPREADSHEET_ID_KEY, spreadsheet.getId());
+  return spreadsheet;
 }
 
 function writeSheet(spreadsheet, sheetName, values) {
