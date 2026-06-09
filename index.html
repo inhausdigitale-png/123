@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Campaign Log</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260609-admin-fields-1" />
   </head>
   <body class="auth-locked">
     <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
@@ -43,6 +43,16 @@
         <button class="primary-button" id="saveData" type="button" title="Save current data">
           Save
         </button>
+        <select class="export-select" id="exportReportType" title="Choose report vertical">
+          <option value="all">All Reports</option>
+          <option value="campaigns">Campaign Tracker</option>
+          <option value="changes">Change Log</option>
+          <option value="targets">Target Budget</option>
+          <option value="portal">Portal Report</option>
+          <option value="creatives">Creative Performance</option>
+          <option value="projectSummary">Project Summary</option>
+          <option value="portalSummary">Portal Wise Summary</option>
+        </select>
         <button class="ghost-button" id="exportCsv" type="button" title="Download CSV files">
           <span aria-hidden="true">↓</span>
           Export
@@ -72,6 +82,7 @@
           <button type="button" data-tab="creatives">Creative Entry</button>
           <button type="button" data-tab="creativePerformance">Creative Performance</button>
         </details>
+        <button class="tab admin-only" data-tab="admin" type="button">Admin</button>
         <button class="tab" data-tab="settings" type="button">Settings</button>
       </nav>
 
@@ -544,6 +555,68 @@
         <div class="review-list" id="reviewList"></div>
       </section>
 
+      <section class="panel admin-only" id="admin" aria-labelledby="adminTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Team Access</p>
+            <h2 id="adminTitle">Admin Panel</h2>
+          </div>
+          <span class="date-chip" id="adminUserCount"></span>
+        </div>
+
+        <div class="settings-block admin-create-panel">
+          <div class="surface-head">
+            <h3>Add Team User</h3>
+            <span>Assign projects before sharing login details</span>
+          </div>
+          <div class="admin-form">
+            <label>
+              User Name
+              <input id="adminNewUsername" type="text" placeholder="example: john" />
+            </label>
+            <label>
+              Display Name
+              <input id="adminNewName" type="text" placeholder="Team member name" />
+            </label>
+            <label>
+              Password
+              <input id="adminNewPassword" type="text" placeholder="Temporary password" />
+            </label>
+            <label>
+              Role
+              <select id="adminNewRole">
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <button class="primary-button" id="adminAddUser" type="button">Add User</button>
+          </div>
+          <p class="import-status" id="adminStatus"></p>
+        </div>
+
+        <div class="settings-block">
+          <div class="surface-head">
+            <h3>Users and Project Access</h3>
+            <span>Only admins can see this panel</span>
+          </div>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Password Reset</th>
+                  <th>Assigned Projects</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="adminUserRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="settings" aria-labelledby="settingsTitle">
         <div class="section-heading">
           <div>
@@ -684,6 +757,6 @@
       </div>
     </template>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20260609-admin-fields-1"></script>
   </body>
 </html>
