@@ -4,6 +4,15 @@ const USERS_KEY = "campaign-log-users-v1";
 const CLOUD_SYNC_DELAY = 1200;
 const CLOUD_REFRESH_INTERVAL = 60000;
 const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/macros/s/AKfycbwwV7Ymr4WLaJ43KlLuhf5XjYI7zSzeNK6wJVotEDPZ1C3YbbivXzMEFW2-7jl935oQPA/exec";
+const DEFAULT_ADMIN = {
+  username: "admin",
+  name: "Admin",
+  password: "YWRtaW4xMjM=",
+  role: "admin",
+  projects: ["All Projects"],
+  active: true,
+  createdAt: "2026-06-09T00:00:00.000Z",
+};
 let authMode = "signin";
 let cloudSyncTimer;
 let cloudRefreshTimer;
@@ -90,6 +99,7 @@ const sampleState = {
   portalMonth: "2026-05",
   portalProject: "All Projects",
   portalFilter: "All Portals",
+  users: [structuredClone(DEFAULT_ADMIN)],
   projects: [
     { name: "Main Project", adAccountId: "" },
     { name: "Audience Test", adAccountId: "" },
@@ -256,11 +266,11 @@ let saveStatusTimer;
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return structuredClone(sampleState);
+  if (!saved) return normalizeState(structuredClone(sampleState));
   try {
     return normalizeState({ ...structuredClone(sampleState), ...JSON.parse(saved) });
   } catch {
-    return structuredClone(sampleState);
+    return normalizeState(structuredClone(sampleState));
   }
 }
 
@@ -337,6 +347,7 @@ function normalizeState(nextState) {
     autoCloudSync: HARDCODED_DRIVE_SYNC_URL ? true : Boolean(nextState.settings?.autoCloudSync),
     driveSyncUrl: HARDCODED_DRIVE_SYNC_URL || nextState.settings?.driveSyncUrl || "",
   };
+  nextState.users = normalizeUsers(nextState.users);
   const hasOldTargetFormat = (nextState.targets || []).some((row) => row.totalTarget !== undefined && row.medium === undefined);
   if (hasOldTargetFormat) nextState.targets = structuredClone(sampleState.targets);
   nextState.targets = (nextState.targets || []).map((row) => normalizeTargetRow(row));
@@ -355,6 +366,37 @@ function normalizeState(nextState) {
     };
   });
   return nextState;
+}
+
+function normalizeUsers(users = []) {
+  const legacyUsers = getUsers();
+  const legacyRows = Object.entries(legacyUsers).map(([username, user]) => ({
+    username,
+    name: user.name || username,
+    password: user.password,
+    role: "user",
+    projects: [],
+    active: true,
+    createdAt: user.createdAt || new Date().toISOString(),
+  }));
+  const rows = [...(Array.isArray(users) ? users : []), ...legacyRows, DEFAULT_ADMIN];
+  const seen = new Map();
+  rows.forEach((user) => {
+    const username = String(user.username || user.name || "").trim().toLowerCase();
+    if (!username || seen.has(username)) return;
+    seen.set(username, {
+      username,
+      name: String(user.name || username).trim(),
+      password: user.password || "",
+      role: user.role === "admin" ? "admin" : "user",
+      projects: Array.isArray(user.projects) ? user.projects.filter(Boolean) : [],
+      active: user.active !== false,
+      createdAt: user.createdAt || new Date().toISOString(),
+    });
+  });
+  const normalized = [...seen.values()];
+  if (!normalized.some((user) => user.role === "admin")) normalized.unshift(structuredClone(DEFAULT_ADMIN));
+  return normalized;
 }
 
 function normalizePortalRow(row) {
@@ -521,52 +563,62 @@ async function saveCloudState() {
   }
 }
 
-function loadCloudState() {
+function loadCloudState(options = {}) {
   const url = cleanCloudUrl();
   if (!url) {
-    setCloudStatus("Cloud URL is missing.");
-    return;
+    if (!options.silent) setCloudStatus("Cloud URL is missing.");
+    return Promise.resolve(false);
   }
-  const callbackName = `campaignLogCloudLoad_${Date.now()}`;
-  const script = document.createElement("script");
-  const joiner = url.includes("?") ? "&" : "?";
-  setCloudStatus("Loading cloud data...");
-  window[callbackName] = (response) => {
-    try {
-      if (!response?.ok) throw new Error(response?.error || "Cloud data could not be loaded");
-      if (!response.data) {
-        setCloudStatus("Cloud is empty. Creating the first shared team copy now...");
-        saveCloudState();
-        return;
+  return new Promise((resolve) => {
+    const callbackName = `campaignLogCloudLoad_${Date.now()}`;
+    const script = document.createElement("script");
+    const joiner = url.includes("?") ? "&" : "?";
+    if (!options.silent) setCloudStatus("Loading cloud data...");
+    window[callbackName] = (response) => {
+      try {
+        if (!response?.ok) throw new Error(response?.error || "Cloud data could not be loaded");
+        if (!response.data) {
+          if (!options.silent) setCloudStatus("Cloud is empty. Creating the first shared team copy now...");
+          if (!options.skipSeed) saveCloudState();
+          resolve(false);
+          return;
+        }
+        isLoadingCloud = true;
+        const currentSettings = { ...state.settings };
+        state = normalizeState({ ...structuredClone(sampleState), ...response.data });
+        state.settings = {
+          ...state.settings,
+          ...currentSettings,
+          driveSyncUrl: HARDCODED_DRIVE_SYNC_URL || currentSettings.driveSyncUrl || state.settings.driveSyncUrl,
+          autoCloudSync: HARDCODED_DRIVE_SYNC_URL ? true : Boolean(currentSettings.autoCloudSync),
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        render();
+        if (!options.silent) {
+          setCloudStatus(`Loaded cloud data saved on ${response.savedAt || "Drive"}.`);
+          showSaveStatus("Cloud loaded");
+        }
+        resolve(true);
+      } catch (error) {
+        if (!options.silent) setCloudStatus(`Cloud load failed: ${error.message}`);
+        resolve(false);
+      } finally {
+        isLoadingCloud = false;
+        script.remove();
+        delete window[callbackName];
       }
-      isLoadingCloud = true;
-      const currentSettings = { ...state.settings };
-      state = normalizeState({ ...structuredClone(sampleState), ...response.data });
-      state.settings = {
-        ...state.settings,
-        ...currentSettings,
-        driveSyncUrl: HARDCODED_DRIVE_SYNC_URL || currentSettings.driveSyncUrl || state.settings.driveSyncUrl,
-        autoCloudSync: HARDCODED_DRIVE_SYNC_URL ? true : Boolean(currentSettings.autoCloudSync),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      render();
-      setCloudStatus(`Loaded cloud data saved on ${response.savedAt || "Drive"}.`);
-      showSaveStatus("Cloud loaded");
-    } catch (error) {
-      setCloudStatus(`Cloud load failed: ${error.message}`);
-    } finally {
-      isLoadingCloud = false;
+    };
+    script.onerror = () => {
+      if (!options.silent) {
+        setCloudStatus("Cloud load failed. In Apps Script, deploy as Web app with access set to Anyone or Anyone in adissia.com, then use the /macros/s/.../exec URL.");
+      }
       script.remove();
       delete window[callbackName];
-    }
-  };
-  script.onerror = () => {
-    setCloudStatus("Cloud load failed. In Apps Script, deploy as Web app with access set to Anyone or Anyone in adissia.com, then use the /macros/s/.../exec URL.");
-    script.remove();
-    delete window[callbackName];
-  };
-  script.src = `${url}${joiner}action=load&callback=${callbackName}&t=${Date.now()}`;
-  document.body.append(script);
+      resolve(false);
+    };
+    script.src = `${url}${joiner}action=load&callback=${callbackName}&t=${Date.now()}`;
+    document.body.append(script);
+  });
 }
 
 function money(value) {
@@ -616,6 +668,7 @@ function inPortalDashboardDateRange(dateString) {
 function matchesProject(row) {
   const project = state.filters?.project || "All Projects";
   const rowProject = row.project || campaignProject(row.campaignId);
+  if (!canAccessProject(rowProject)) return false;
   return project === "All Projects" || rowProject === project;
 }
 
@@ -733,6 +786,7 @@ function currentTargetRows() {
   const search = String(state.targetSearch || "").trim().toLowerCase();
   const selectedProject = state.targetProject || "All Projects";
   return state.targets.filter((row) => {
+    if (!canAccessProject(row.project)) return false;
     if (row.month !== state.targetMonth) return false;
     if (selectedProject !== "All Projects" && row.project !== selectedProject) return false;
     if (state.targetView === "online" && !isOnlineMedium(row)) return false;
@@ -820,6 +874,7 @@ function td(child, className = "") {
 
 function updateCampaign(index, key, value) {
   const numeric = ["before", "after", "budget", "spend", "impressions", "clicks", "leads", "svc", "booked", "revenue"];
+  if (key === "project" && !canAccessProject(value)) return;
   state.campaigns[index][key] = numeric.includes(key) ? numberValue(value) : value;
   saveState();
   render();
@@ -827,6 +882,7 @@ function updateCampaign(index, key, value) {
 
 function updateChange(index, key, value) {
   const numeric = ["before", "after", "leads", "svc", "booked"];
+  if (key === "project" && !canAccessProject(value)) return;
   state.changes[index][key] = numeric.includes(key) ? numberValue(value) : value;
   if (key === "campaignId" && !state.changes[index].project) {
     state.changes[index].project = campaignProject(value);
@@ -851,6 +907,7 @@ function updateTarget(index, key, value) {
     "btlLeadTarget", "btlLeadAchieved", "leadAllocation", "siteVisit", "booking",
   ];
   const weeklyFields = ["spend", "totalLeadAchieved", "digitalLeadAchieved", "btlLeadAchieved", "leadAllocation", "siteVisit", "booking"];
+  if (key === "project" && !canAccessProject(value)) return;
   if (state.targetWeek !== "total" && weeklyFields.includes(key)) {
     state.targets[stateIndex].weeks[state.targetWeek] = {
       ...normalizeTargetWeek(state.targets[stateIndex].weeks[state.targetWeek]),
@@ -944,7 +1001,8 @@ function renderCampaignRows() {
   renderCampaignHeaders();
   const body = document.querySelector("#campaignRows");
   body.innerHTML = "";
-  state.campaigns.forEach((row, index) => {
+  state.campaigns.filter(canAccessRow).forEach((row) => {
+    const index = state.campaigns.indexOf(row);
     const calc = calcCampaign(row);
     const tr = document.createElement("tr");
     tr.append(...visibleTrackerColumns(row, index, calc).map((column) => column.cell()));
@@ -968,7 +1026,8 @@ function renderCampaignHeaders() {
 function renderChangeRows() {
   const body = document.querySelector("#changeRows");
   body.innerHTML = "";
-  state.changes.forEach((row, index) => {
+  state.changes.filter(canAccessRow).forEach((row) => {
+    const index = state.changes.indexOf(row);
     const improved = calcChange(row);
     const funnel = calcChangeFunnel(row);
     const tr = document.createElement("tr");
@@ -1113,6 +1172,7 @@ function renderTargetTotalRow(rows) {
 
 function targetProjectOptions() {
   const projects = state.targets
+    .filter((row) => canAccessProject(row.project))
     .filter((row) => row.month === state.targetMonth)
     .map((row) => row.project)
     .filter(Boolean);
@@ -1121,6 +1181,7 @@ function targetProjectOptions() {
 
 function portalRowsForView() {
   return state.portalRows.filter((row) => {
+    if (!canAccessProject(row.project)) return false;
     if (row.month !== state.portalMonth) return false;
     if (state.portalProject !== "All Projects" && row.project !== state.portalProject) return false;
     if (state.portalFilter !== "All Portals" && row.portal !== state.portalFilter) return false;
@@ -1129,7 +1190,7 @@ function portalRowsForView() {
 }
 
 function portalOptionsForMonth() {
-  const rows = state.portalRows.filter((row) => row.month === state.portalMonth);
+  const rows = state.portalRows.filter((row) => row.month === state.portalMonth && canAccessProject(row.project));
   return {
     projects: ["All Projects", ...new Set(rows.map((row) => row.project).filter(Boolean))],
     portals: ["All Portals", ...new Set(rows.map((row) => row.portal).filter(Boolean))],
@@ -1294,15 +1355,18 @@ function creativeStats(row) {
 }
 
 function creativeFilterOptions() {
-  const projects = ["All Projects", ...new Set(state.campaigns.map((row) => row.project).filter(Boolean))];
-  const campaigns = ["All Campaigns", ...new Set(state.campaigns.map((row) => row.name).filter(Boolean))];
-  const types = ["All Types", ...new Set(state.creatives.map((row) => row.creativeType).filter(Boolean))];
+  const allowedCampaigns = state.campaigns.filter(canAccessRow);
+  const allowedCreatives = state.creatives.filter(canAccessRow);
+  const projects = ["All Projects", ...new Set(allowedCampaigns.map((row) => row.project).filter(Boolean))];
+  const campaigns = ["All Campaigns", ...new Set(allowedCampaigns.map((row) => row.name).filter(Boolean))];
+  const types = ["All Types", ...new Set(allowedCreatives.map((row) => row.creativeType).filter(Boolean))];
   return { projects, campaigns, types };
 }
 
 function visibleCreativeRows() {
   const filters = state.filters || {};
   return state.creatives.filter((row) => {
+    if (!canAccessProject(row.project)) return false;
     if (filters.creativeProject !== "All Projects" && row.project !== filters.creativeProject) return false;
     if (filters.creativeCampaign !== "All Campaigns" && row.campaignName !== filters.creativeCampaign) return false;
     if (filters.creativeType !== "All Types" && row.creativeType !== filters.creativeType) return false;
@@ -1633,12 +1697,13 @@ function portalPeriodDetails(date, view) {
 }
 
 function campaignOptions() {
-  const ids = state.campaigns.map((row) => row.id).filter(Boolean);
+  const ids = state.campaigns.filter(canAccessRow).map((row) => row.id).filter(Boolean);
   return ids.length ? ids : ["No Campaign"];
 }
 
 function campaignSelectOptions() {
   const options = state.campaigns
+    .filter(canAccessRow)
     .filter((row) => row.id)
     .map((row) => ({
       value: row.id,
@@ -1648,12 +1713,8 @@ function campaignSelectOptions() {
 }
 
 function projectOptions() {
-  const names = [
-    ...state.projects.map((project) => project.name).filter(Boolean),
-    ...state.campaigns.map((row) => row.project).filter(Boolean),
-  ];
-  const unique = [...new Set(names)];
-  return unique.length ? unique : ["Main Project"];
+  const allowed = userProjectList();
+  return allowed.length ? allowed : ["Main Project"];
 }
 
 function adAccountForProject(projectName) {
@@ -1696,9 +1757,10 @@ function performanceClass(value) {
 }
 
 function renderDashboard() {
-  const dateCampaignRows = state.campaigns.filter((row) => inDateRange(row.date));
-  const dateChangeRows = state.changes.filter((row) => inDateRange(row.date));
+  const dateCampaignRows = state.campaigns.filter((row) => inDateRange(row.date) && canAccessRow(row));
+  const dateChangeRows = state.changes.filter((row) => inDateRange(row.date) && canAccessRow(row));
   const portalDashboardRows = state.portalRows
+    .filter((row) => canAccessProject(row.project))
     .filter((row) => inPortalDashboardDateRange(row.date))
     .filter((row) => state.filters.project === "All Projects" || row.project === state.filters.project);
   const campaignRows = dateCampaignRows.filter(matchesProject);
@@ -1951,6 +2013,7 @@ function renderBars(selector, rows) {
 function renderReviews() {
   const list = document.querySelector("#reviewList");
   const rows = state.changes
+    .filter(canAccessRow)
     .filter((row) => row.followUp)
     .sort((a, b) => a.followUp.localeCompare(b.followUp));
   document.querySelector("#reviewCount").textContent = `${rows.length} scheduled`;
@@ -2001,6 +2064,159 @@ function renderSettings() {
   renderTrackerToolbarMenus();
 }
 
+function renderAdminPanel() {
+  state.users = normalizeUsers(state.users);
+  const admin = isAdminUser();
+  document.querySelectorAll(".admin-only").forEach((item) => item.classList.toggle("is-hidden", !admin));
+  if (!admin) {
+    if (document.querySelector("#admin")?.classList.contains("is-active")) setActiveTab("dashboard");
+    return;
+  }
+  const count = document.querySelector("#adminUserCount");
+  if (count) count.textContent = `${state.users.length} users`;
+  const body = document.querySelector("#adminUserRows");
+  if (!body) return;
+  const projects = allProjectOptions();
+  body.innerHTML = "";
+  if (!state.users.length) {
+    const tr = document.createElement("tr");
+    const cell = td("No users found. Use admin / admin123 to sign in and add your team.", "wide");
+    cell.colSpan = 6;
+    tr.append(cell);
+    body.append(tr);
+    return;
+  }
+  state.users.forEach((user, index) => {
+    const userProjects = Array.isArray(user.projects) ? user.projects : [];
+    const tr = document.createElement("tr");
+    const nameCell = el("div", "user-cell");
+    const displayName = document.createElement("strong");
+    displayName.textContent = user.name || user.username;
+    const userName = document.createElement("span");
+    userName.textContent = user.username;
+    nameCell.append(displayName, userName);
+    const projectBox = el("div", "project-checklist");
+    const allLabel = document.createElement("label");
+    const allInput = document.createElement("input");
+    allInput.type = "checkbox";
+    allInput.checked = user.role === "admin" || userProjects.includes("All Projects");
+    allInput.addEventListener("change", () => {
+      state.users[index].projects = allInput.checked ? ["All Projects"] : [];
+      saveState();
+      render();
+    });
+    allLabel.append(allInput, "All Projects");
+    projectBox.append(allLabel);
+    projects.forEach((project) => {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.disabled = userProjects.includes("All Projects") || user.role === "admin";
+      checkbox.checked = userProjects.includes(project) || userProjects.includes("All Projects") || user.role === "admin";
+      checkbox.addEventListener("change", () => toggleUserProject(index, project, checkbox.checked));
+      label.append(checkbox, project);
+      projectBox.append(label);
+    });
+    tr.append(
+      td(nameCell, "wide"),
+      td(select(user.role || "user", ["user", "admin"], (value) => updateTeamUser(index, "role", value))),
+      td(select(user.active === false ? "Inactive" : "Active", ["Active", "Inactive"], (value) => updateTeamUser(index, "active", value === "Active"))),
+      td(input("", "text", (value) => updateTeamPassword(index, value)), "wide"),
+      td(projectBox, "wide"),
+      td(deleteButton(() => deleteTeamUser(index))),
+    );
+    body.append(tr);
+  });
+}
+
+function updateTeamUser(index, key, value) {
+  if (!state.users[index]) return;
+  if (key === "role" && state.users[index].username === currentUserKey() && value !== "admin") {
+    document.querySelector("#adminStatus").textContent = "You cannot remove your own admin access while logged in.";
+    return;
+  }
+  state.users[index][key] = value;
+  if (key === "role" && value === "admin") state.users[index].projects = ["All Projects"];
+  saveState();
+  render();
+}
+
+function updateTeamPassword(index, value) {
+  const password = String(value || "").trim();
+  if (!password) return;
+  if (password.length < 4) {
+    document.querySelector("#adminStatus").textContent = "Password must be at least 4 characters.";
+    return;
+  }
+  state.users[index].password = passwordHash(password);
+  document.querySelector("#adminStatus").textContent = `Password updated for ${state.users[index].username}.`;
+  saveState();
+  render();
+}
+
+function toggleUserProject(index, project, checked) {
+  const user = state.users[index];
+  if (!user) return;
+  const projects = new Set((user.projects || []).filter((item) => item !== "All Projects"));
+  if (checked) projects.add(project);
+  else projects.delete(project);
+  user.projects = [...projects];
+  saveState();
+  render();
+}
+
+function addTeamUser() {
+  const username = document.querySelector("#adminNewUsername").value.trim().toLowerCase();
+  const name = document.querySelector("#adminNewName").value.trim() || username;
+  const password = document.querySelector("#adminNewPassword").value.trim();
+  const role = document.querySelector("#adminNewRole").value || "user";
+  const status = document.querySelector("#adminStatus");
+  if (!username || !password) {
+    status.textContent = "Enter user name and password.";
+    return;
+  }
+  if (password.length < 4) {
+    status.textContent = "Password must be at least 4 characters.";
+    return;
+  }
+  if (state.users.some((user) => user.username === username)) {
+    status.textContent = "This user already exists.";
+    return;
+  }
+  state.users.push({
+    username,
+    name,
+    password: passwordHash(password),
+    role,
+    projects: role === "admin" ? ["All Projects"] : [],
+    active: true,
+    createdAt: new Date().toISOString(),
+  });
+  document.querySelector("#adminNewUsername").value = "";
+  document.querySelector("#adminNewName").value = "";
+  document.querySelector("#adminNewPassword").value = "";
+  status.textContent = "User added. Tick the projects they can manage.";
+  saveState();
+  render();
+}
+
+function deleteTeamUser(index) {
+  const user = state.users[index];
+  if (!user) return;
+  if (user.username === currentUserKey()) {
+    document.querySelector("#adminStatus").textContent = "You cannot delete your own login while logged in.";
+    return;
+  }
+  const activeAdmins = state.users.filter((item) => item.role === "admin" && item.active !== false);
+  if (user.role === "admin" && activeAdmins.length <= 1) {
+    document.querySelector("#adminStatus").textContent = "Keep at least one active admin.";
+    return;
+  }
+  state.users.splice(index, 1);
+  saveState();
+  render();
+}
+
 function updateProjectSetting(index, key, value) {
   const oldName = state.projects[index]?.name;
   state.projects[index][key] = value;
@@ -2010,6 +2226,9 @@ function updateProjectSetting(index, key, value) {
     });
     state.changes.forEach((row) => {
       if (row.project === oldName) row.project = value;
+    });
+    state.users.forEach((user) => {
+      user.projects = (user.projects || []).map((project) => project === oldName ? value : project);
     });
     if (state.filters.project === oldName) state.filters.project = value;
   }
@@ -2150,6 +2369,7 @@ function render() {
   renderDashboard();
   renderReviews();
   renderSettings();
+  renderAdminPanel();
   renderFilters();
 }
 
@@ -2200,6 +2420,61 @@ function saveUsers(users) {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 
+function currentUserKey() {
+  return String(localStorage.getItem(AUTH_KEY) || "").trim().toLowerCase();
+}
+
+function currentUser() {
+  const key = currentUserKey();
+  return state.users.find((user) => user.username === key) || null;
+}
+
+function isAdminUser(user = currentUser()) {
+  return user?.role === "admin";
+}
+
+function findLoginUser(name) {
+  const key = String(name || "").trim().toLowerCase();
+  return state.users.find((user) => user.username === key && user.active !== false);
+}
+
+function passwordHash(password) {
+  return btoa(password);
+}
+
+function allProjectOptions() {
+  const names = [
+    ...state.projects.map((project) => project.name).filter(Boolean),
+    ...state.campaigns.map((row) => row.project).filter(Boolean),
+    ...state.targets.map((row) => row.project).filter(Boolean),
+    ...state.portalRows.map((row) => row.project).filter(Boolean),
+    ...state.creatives.map((row) => row.project).filter(Boolean),
+  ];
+  const unique = [...new Set(names)];
+  return unique.length ? unique : ["Main Project"];
+}
+
+function userProjectList(user = currentUser()) {
+  if (!user) return allProjectOptions();
+  if (isAdminUser(user) || user.projects?.includes("All Projects")) return allProjectOptions();
+  return (user.projects || []).filter((project) => allProjectOptions().includes(project));
+}
+
+function canAccessProject(projectName) {
+  const user = currentUser();
+  if (!user || isAdminUser(user) || user.projects?.includes("All Projects")) return true;
+  return Boolean(projectName && user.projects?.includes(projectName));
+}
+
+function canAccessRow(row) {
+  const project = row?.project || campaignProject(row?.campaignId);
+  return canAccessProject(project);
+}
+
+function firstAllowedProject() {
+  return userProjectList()[0] || allProjectOptions()[0] || "Main Project";
+}
+
 function setAuthMode(mode) {
   authMode = mode;
   const isSignup = mode === "signup";
@@ -2215,7 +2490,7 @@ function setAuthMode(mode) {
   document.querySelector("#loginError").textContent = "";
 }
 
-function login(event) {
+async function login(event) {
   event.preventDefault();
   const name = document.querySelector("#loginName").value.trim();
   const password = document.querySelector("#loginPassword").value.trim();
@@ -2225,7 +2500,6 @@ function login(event) {
     error.textContent = "Enter user name and password.";
     return;
   }
-  const users = getUsers();
   const userKey = name.toLowerCase();
   if (authMode === "signup") {
     if (password.length < 4) {
@@ -2236,20 +2510,38 @@ function login(event) {
       error.textContent = "Passwords do not match.";
       return;
     }
-    if (users[userKey]) {
+    if (findLoginUser(userKey)) {
       error.textContent = "This user already exists. Please sign in.";
       return;
     }
-    users[userKey] = { name, password: btoa(password), createdAt: new Date().toISOString() };
-    saveUsers(users);
-  } else if (!users[userKey] || users[userKey].password !== btoa(password)) {
-    error.textContent = "Account not found or password is wrong.";
-    return;
+    state.users.push({
+      username: userKey,
+      name,
+      password: passwordHash(password),
+      role: "user",
+      projects: [],
+      active: true,
+      createdAt: new Date().toISOString(),
+    });
+    saveState();
+  } else {
+    let user = findLoginUser(userKey);
+    if (!user || user.password !== passwordHash(password)) {
+      error.textContent = "Checking team data...";
+      await loadCloudState({ silent: true, skipSeed: true });
+      user = findLoginUser(userKey);
+    }
+    if (!user || user.password !== passwordHash(password)) {
+      error.textContent = "Account not found, inactive, or password is wrong.";
+      return;
+    }
   }
   error.textContent = "";
-  localStorage.setItem(AUTH_KEY, name);
+  localStorage.setItem(AUTH_KEY, userKey);
   showApp();
   setActiveTab("dashboard");
+  await loadCloudState({ silent: true, skipSeed: true });
+  render();
 }
 
 function logout() {
@@ -2260,9 +2552,10 @@ function logout() {
 
 function addCampaign() {
   const next = String(state.campaigns.length + 1).padStart(3, "0");
+  const project = firstAllowedProject();
   state.campaigns.push({
     date: todayIso(),
-    project: "Main Project",
+    project,
     id: `CMP-${next}`,
     name: "",
     adsetName: "",
@@ -2291,12 +2584,12 @@ function addCampaign() {
 
 function addChange() {
   const next = String(state.changes.length + 1).padStart(3, "0");
-  const campaignId = state.campaigns[0]?.id || "CMP-001";
+  const campaignId = state.campaigns.find(canAccessRow)?.id || "CMP-001";
   state.changes.push({
     id: `CHG-${next}`,
     date: todayIso(),
     campaignId,
-    project: campaignProject(campaignId) || "Main Project",
+    project: campaignProject(campaignId) || firstAllowedProject(),
     adsetName: campaignAdsetName(campaignId),
     campaignStatus: latestCampaignStatus(campaignId, "Active"),
     type: "Image / Creative",
@@ -2319,7 +2612,7 @@ function addChange() {
 function addTargetProject() {
   state.targets.push(normalizeTargetRow({
     month: state.targetMonth || todayIso().slice(0, 7),
-    project: "One World",
+    project: state.targetProject !== "All Projects" && canAccessProject(state.targetProject) ? state.targetProject : firstAllowedProject(),
     medium: `Medium ${currentTargetRows().length + 1}`,
     budget: 0,
   }));
@@ -2333,7 +2626,7 @@ function addPortalRow() {
     date,
     month: state.portalMonth || date.slice(0, 7),
     portal: state.portalFilter !== "All Portals" ? state.portalFilter : "99 Acres",
-    project: state.portalProject !== "All Projects" ? state.portalProject : "One World",
+    project: state.portalProject !== "All Projects" && canAccessProject(state.portalProject) ? state.portalProject : firstAllowedProject(),
   }));
   saveState();
   render();
@@ -2352,14 +2645,15 @@ function resetPortalRows() {
 function addCreativeRow() {
   const next = String(state.creatives.length + 1).padStart(3, "0");
   const campaign = state.campaigns.find((row) => (
+    canAccessRow(row) &&
     (state.filters.creativeProject === "All Projects" || row.project === state.filters.creativeProject) &&
     (state.filters.creativeCampaign === "All Campaigns" || row.name === state.filters.creativeCampaign)
-  )) || state.campaigns[0];
+  )) || state.campaigns.find(canAccessRow);
   state.creatives.push(normalizeCreativeRow({
     id: `CRT-${next}`,
     date: todayIso(),
     campaignId: campaign?.id || "",
-    project: campaign?.project || "Main Project",
+    project: campaign?.project || firstAllowedProject(),
     campaignName: campaign?.name || "",
     adsetName: campaign?.adsetName || "",
     creativeType: state.filters.creativeType !== "All Types" ? state.filters.creativeType : "Static",
@@ -2483,6 +2777,7 @@ function bindEvents() {
     saveState();
     render();
   });
+  document.querySelector("#adminAddUser")?.addEventListener("click", addTeamUser);
   document.querySelector("#downloadTemplate").addEventListener("click", downloadImportTemplate);
   document.querySelector("#importFile").addEventListener("change", importCsvFile);
   document.querySelector("#filterProject").addEventListener("change", (event) => {
@@ -2704,8 +2999,14 @@ function rowToObject(headers, row) {
   }, {});
 }
 
+function importProjectAllowed(projectName) {
+  const project = projectName || firstAllowedProject();
+  return canAccessProject(project);
+}
+
 function importCampaigns(records) {
   records.forEach((record) => {
+    if (!importProjectAllowed(record.Project)) return;
     upsertProject(record.Project, record["Ad Account ID"]);
     state.campaigns.push({
       date: record.Date || todayIso(),
@@ -2737,6 +3038,7 @@ function importCampaigns(records) {
 
 function importChanges(records) {
   records.forEach((record) => {
+    if (!importProjectAllowed(record.Project || campaignProject(record["Campaign ID"]))) return;
     upsertProject(record.Project, record["Ad Account ID"]);
     state.changes.push({
       id: record["Change ID"] || `CHG-${String(state.changes.length + 1).padStart(3, "0")}`,
@@ -2762,7 +3064,10 @@ function importChanges(records) {
 }
 
 function importProjects(records) {
-  records.forEach((record) => upsertProject(record.Project, record["Ad Account ID"]));
+  records.forEach((record) => {
+    if (!isAdminUser() && !canAccessProject(record.Project)) return;
+    upsertProject(record.Project, record["Ad Account ID"]);
+  });
 }
 
 function importMetrics(records) {
@@ -2785,6 +3090,7 @@ function importMetrics(records) {
 
 function importTargets(records) {
   records.forEach((record) => {
+    if (!importProjectAllowed(record.Project)) return;
     const month = record.Month || state.targetMonth || todayIso().slice(0, 7);
     const row = normalizeTargetRow({
       month,
@@ -2860,6 +3166,7 @@ function importTargetWeekly(records) {
   records.forEach((record) => {
     const month = record.Month || state.targetMonth || todayIso().slice(0, 7);
     const project = record.Project || "Project";
+    if (!importProjectAllowed(project)) return;
     const medium = record.Medium || "";
     const week = weekKey(record.Week || state.targetWeek || "Week 1");
     let targetRow = state.targets.find((item) => item.month === month && item.project === project && item.medium === medium);
@@ -2884,6 +3191,7 @@ function importTargetWeekly(records) {
 
 function importPortalRows(records) {
   records.forEach((record) => {
+    if (!importProjectAllowed(record.Project)) return;
     const date = record.Date || todayIso();
     const row = normalizePortalRow({
       date,
@@ -2919,7 +3227,7 @@ function importCreativeRows(records) {
         (campaign.name || "").trim().toLowerCase() === importedCampaignName &&
         (!record.Project || campaign.project === record.Project)
       )) || state.campaigns.find((campaign) => (campaign.name || "").trim().toLowerCase() === importedCampaignName);
-    if (!matchedCampaign) return;
+    if (!matchedCampaign || !canAccessProject(matchedCampaign.project)) return;
     const row = normalizeCreativeRow({
       id: record["Creative ID"] || "",
       date: record.Date || todayIso(),
@@ -3007,25 +3315,31 @@ function parseCsv(text) {
   return rows;
 }
 
-function exportCsv() {
-  download("campaign-tracker.csv", [
+function campaignTrackerExportRows() {
+  return [
     ["Date", "Project", "Ad Account ID", "Campaign ID", "Name", "Ad Set Name", "Platform", "Placement", "Country", "Age", "Device", "Objective", "Status", "Last Edited", "Last Change", "Metric", "Before Value", "After Value", "Budget", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Revenue", "CTR", "CVR", "SVC %", "Booked %", "CPA/CPL", "ROAS", "Flag", "Performance"],
-    ...state.campaigns.map((row) => {
+    ...state.campaigns.filter(canAccessRow).map((row) => {
       const calc = calcCampaign(row);
       return [row.date, row.project, adAccountForProject(row.project), row.id, row.name, row.adsetName, row.platform, row.placement, row.country, row.age, row.device, row.objective, latestCampaignStatus(row.id, row.status), latestChangeDate(row.id), latestChangeText(row.id), row.metric || "CPA/CPL", row.before, row.after, row.budget, row.spend, row.impressions, row.clicks, calc.leads, calc.svc, calc.booked, row.revenue, percent(calc.ctr), percent(calc.cvr), percent(calc.svcRate), percent(calc.bookedRate), calc.cpa.toFixed(2), calc.roas.toFixed(2), calc.flag, calc.performance];
     }),
-  ]);
-  download("campaign-change-log.csv", [
+  ];
+}
+
+function changeLogExportRows() {
+  return [
     ["Change ID", "Date", "Project", "Ad Account ID", "Campaign ID", "Campaign Name", "Ad Set Name", "Campaign Status", "Type", "Changed", "Reason", "Metric", "Before Value", "After Value", "Improved", "Leads", "SVC", "SVC %", "Booked", "Booked %", "Owner", "Follow-up", "Status", "Next Action"],
-    ...state.changes.map((row) => {
+    ...state.changes.filter(canAccessRow).map((row) => {
       const funnel = calcChangeFunnel(row);
       const project = row.project || campaignProject(row.campaignId);
       return [row.id, row.date, project, adAccountForProject(project), row.campaignId, campaignName(row.campaignId), row.adsetName || campaignAdsetName(row.campaignId), row.campaignStatus || latestCampaignStatus(row.campaignId), row.type, row.changed, row.reason, row.metric || "CPA/CPL", row.before, row.after, calcChange(row), funnel.leads, funnel.svc, percent(funnel.svcRate), funnel.booked, percent(funnel.bookedRate), row.owner, row.followUp, reviewStatus(row), row.nextAction];
     }),
-  ]);
-  download("campaign-target-vs-achieved.csv", [
+  ];
+}
+
+function targetExportRows() {
+  return [
     importTemplates.targets,
-    ...state.targets.map((row) => [
+    ...state.targets.filter((row) => canAccessProject(row.project)).map((row) => [
       row.month,
       row.project,
       row.medium,
@@ -3076,10 +3390,13 @@ function exportCsv() {
       row.weeks.week5.siteVisit,
       row.weeks.week5.booking,
     ]),
-  ]);
-  download("portal-report.csv", [
+  ];
+}
+
+function portalExportRows() {
+  return [
     importTemplates.portal,
-    ...state.portalRows.map((row) => [
+    ...state.portalRows.filter((row) => canAccessProject(row.project)).map((row) => [
       row.date,
       row.portal,
       row.project,
@@ -3090,10 +3407,13 @@ function exportCsv() {
       row.gross,
       row.net,
     ]),
-  ]);
-  download("creative-performance-report.csv", [
+  ];
+}
+
+function creativeExportRows() {
+  return [
     [...importTemplates.creatives, "CTR", "CPL", "SVC %", "Booked %", "Calculated Status", "Has Image"],
-    ...state.creatives.map((row) => {
+    ...state.creatives.filter(canAccessRow).map((row) => {
       const stats = creativeStats(row);
       return [
         row.date,
@@ -3120,7 +3440,101 @@ function exportCsv() {
         row.imageData ? "Yes" : "No",
       ];
     }),
-  ]);
+  ];
+}
+
+function projectSummaryExportRows() {
+  const rows = state.campaigns.filter((row) => inDateRange(row.date) && matchesProject(row));
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const project = row.project || "Main Project";
+    if (!grouped.has(project)) grouped.set(project, { project, rows: 0, spend: 0, leads: 0, svc: 0, booked: 0, needsAction: 0, indicators: {} });
+    const item = grouped.get(project);
+    const calc = calcCampaign(row);
+    item.rows += 1;
+    item.spend += numberValue(row.spend);
+    item.leads += calc.leads;
+    item.svc += calc.svc;
+    item.booked += calc.booked;
+    item.needsAction += calc.flag === "Needs Action" || calc.flag === "Pause / Fix" ? 1 : 0;
+    item.indicators[calc.performance] = (item.indicators[calc.performance] || 0) + 1;
+  });
+  return [
+    ["Project", "Ad Account ID", "Campaign Rows", "Spend", "Leads", "SVC", "SVC %", "Booked", "Booked %", "Need Action", "Main Indicator"],
+    ...[...grouped.values()].sort((a, b) => a.project.localeCompare(b.project)).map((item) => [
+      item.project,
+      adAccountForProject(item.project),
+      item.rows,
+      item.spend,
+      item.leads,
+      item.svc,
+      percent(item.leads ? item.svc / item.leads : 0),
+      item.booked,
+      percent(item.svc ? item.booked / item.svc : 0),
+      item.needsAction,
+      mainProjectIndicator(item.indicators),
+    ]),
+  ];
+}
+
+function portalSummaryExportRows() {
+  const view = state.filters?.portalPeriod || "range";
+  const rows = state.portalRows
+    .filter((row) => canAccessProject(row.project))
+    .filter((row) => inPortalDashboardDateRange(row.date))
+    .filter((row) => state.filters.project === "All Projects" || row.project === state.filters.project);
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const period = portalPeriodDetails(row.date, view);
+    const key = `${period.key}::${row.portal || "Portal"}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, { periodKey: period.key, periodLabel: period.label, portal: row.portal || "Portal", projects: new Set(), dates: new Set(), generated: 0, svs: 0, svc: 0, walkin: 0, gross: 0, net: 0 });
+    }
+    const item = grouped.get(key);
+    item.projects.add(row.project || "Project");
+    item.dates.add(row.date || "");
+    item.generated += numberValue(row.generated);
+    item.svs += numberValue(row.svs);
+    item.svc += numberValue(row.svc);
+    item.walkin += numberValue(row.walkin);
+    item.gross += numberValue(row.gross);
+    item.net += numberValue(row.net);
+  });
+  return [
+    ["Period", "Portal", "Projects", "Days", "Generated", "SVS", "SVC", "SVC %", "Generated Walk-in", "Gross Nos", "Net Nos"],
+    ...[...grouped.values()].sort((a, b) => a.periodKey === b.periodKey ? a.portal.localeCompare(b.portal) : a.periodKey.localeCompare(b.periodKey)).map((item) => [
+      item.periodLabel,
+      item.portal,
+      item.projects.size,
+      item.dates.size,
+      item.generated,
+      item.svs,
+      item.svc,
+      percent(item.generated ? item.svc / item.generated : 0),
+      item.walkin,
+      item.gross,
+      item.net,
+    ]),
+  ];
+}
+
+function exportCsv() {
+  const type = document.querySelector("#exportReportType")?.value || "all";
+  const reports = {
+    campaigns: ["campaign-tracker.csv", campaignTrackerExportRows],
+    changes: ["campaign-change-log.csv", changeLogExportRows],
+    targets: ["campaign-target-vs-achieved.csv", targetExportRows],
+    portal: ["portal-report.csv", portalExportRows],
+    creatives: ["creative-performance-report.csv", creativeExportRows],
+    projectSummary: ["project-summary-report.csv", projectSummaryExportRows],
+    portalSummary: ["portal-wise-summary-report.csv", portalSummaryExportRows],
+  };
+  if (type === "all") {
+    Object.values(reports).forEach(([filename, builder]) => download(filename, builder()));
+    return;
+  }
+  const report = reports[type];
+  if (report) download(report[0], report[1]());
 }
 
 function download(filename, rows) {

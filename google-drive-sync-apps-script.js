@@ -92,6 +92,13 @@ function writeReportSheets(data, savedAt) {
       row.clicks, row.leads, row.svc, row.booked, row.status, row.imageData ? "Yes" : "No",
     ]),
   ]);
+  writeSheet(spreadsheet, "Users", [
+    ["Saved At", "User Name", "Display Name", "Role", "Active", "Assigned Projects"],
+    ...(data.users || []).map((row) => [
+      savedAt, row.username, row.name, row.role, row.active !== false ? "Yes" : "No",
+      (row.projects || []).join(", "),
+    ]),
+  ]);
 }
 
 function getReportSpreadsheet() {
