@@ -2,9 +2,12 @@ const STORAGE_KEY = "campaign-log-web-app-v1";
 const AUTH_KEY = "campaign-log-login-v1";
 const USERS_KEY = "campaign-log-users-v1";
 const CLOUD_SYNC_DELAY = 1200;
-const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/a/macros/adissia.com/s/AKfycbwlcE75v-fcBtEmAJgjCaNKz_ryt40acncnhfL8zjNsHFmR5dieRm3NeoQnfI44uwPE/exec";
+const CLOUD_REFRESH_INTERVAL = 60000;
+const HARDCODED_DRIVE_SYNC_URL = "https://script.google.com/macros/s/AKfycbwlcE75v-fcBtEmAJgjCaNKz_ryt40acncnhfL8zjNsHFmR5dieRm3NeoQnfI44uwPE/exec";
 let authMode = "signin";
 let cloudSyncTimer;
+let cloudRefreshTimer;
+let hasLoadedCloudOnOpen = false;
 let isLoadingCloud = false;
 
 const platformOptions = ["Meta", "Google", "YouTube", "LinkedIn", "TikTok", "Email", "Other"];
@@ -99,8 +102,8 @@ const sampleState = {
     minCvr: 2,
     reviewDays: 3,
     warningSpend: 1000,
-    driveSyncUrl: "",
-    autoCloudSync: false,
+    driveSyncUrl: HARDCODED_DRIVE_SYNC_URL,
+    autoCloudSync: true,
   },
   campaigns: [
     {
@@ -331,8 +334,8 @@ function normalizeState(nextState) {
   nextState.settings = {
     ...structuredClone(sampleState.settings),
     ...(nextState.settings || {}),
-    autoCloudSync: Boolean(nextState.settings?.autoCloudSync),
-    driveSyncUrl: nextState.settings?.driveSyncUrl || "",
+    autoCloudSync: HARDCODED_DRIVE_SYNC_URL ? true : Boolean(nextState.settings?.autoCloudSync),
+    driveSyncUrl: HARDCODED_DRIVE_SYNC_URL || nextState.settings?.driveSyncUrl || "",
   };
   const hasOldTargetFormat = (nextState.targets || []).some((row) => row.totalTarget !== undefined && row.medium === undefined);
   if (hasOldTargetFormat) nextState.targets = structuredClone(sampleState.targets);
@@ -452,6 +455,34 @@ function cleanCloudUrl() {
   return (HARDCODED_DRIVE_SYNC_URL || state.settings.driveSyncUrl || "").trim();
 }
 
+function isTeamCloudMode() {
+  return Boolean(cleanCloudUrl());
+}
+
+function canRefreshCloudNow() {
+  const activeTag = document.activeElement?.tagName;
+  return !["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
+}
+
+function startTeamCloudSync() {
+  if (!isTeamCloudMode()) return;
+  state.settings.driveSyncUrl = cleanCloudUrl();
+  state.settings.autoCloudSync = true;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  renderSettings();
+  if (!hasLoadedCloudOnOpen) {
+    hasLoadedCloudOnOpen = true;
+    loadCloudState();
+  }
+  if (!cloudRefreshTimer) {
+    cloudRefreshTimer = setInterval(() => {
+      if (!document.body.classList.contains("auth-locked") && canRefreshCloudNow()) {
+        loadCloudState();
+      }
+    }, CLOUD_REFRESH_INTERVAL);
+  }
+}
+
 function setCloudStatus(message) {
   const status = document.querySelector("#cloudSyncStatus");
   if (status) status.textContent = message;
@@ -468,7 +499,7 @@ function scheduleCloudSave() {
 async function saveCloudState() {
   const url = cleanCloudUrl();
   if (!url) {
-    setCloudStatus("Paste your Google Apps Script URL first.");
+    setCloudStatus("Cloud URL is missing.");
     return;
   }
   const payload = {
@@ -484,16 +515,16 @@ async function saveCloudState() {
       body: JSON.stringify(payload),
     });
     showSaveStatus("Cloud saved");
-    setCloudStatus("Cloud save sent. Open another laptop and use Load Cloud Data.");
+    setCloudStatus("Cloud save sent. Team data will update for everyone.");
   } catch (error) {
-    setCloudStatus(`Cloud save failed: ${error.message}`);
+    setCloudStatus(`Cloud save failed: ${error.message}. In Apps Script, deploy as Web app with access set to Anyone or Anyone in adissia.com.`);
   }
 }
 
 function loadCloudState() {
   const url = cleanCloudUrl();
   if (!url) {
-    setCloudStatus("Paste your Google Apps Script URL first.");
+    setCloudStatus("Cloud URL is missing.");
     return;
   }
   const callbackName = `campaignLogCloudLoad_${Date.now()}`;
@@ -506,7 +537,12 @@ function loadCloudState() {
       isLoadingCloud = true;
       const currentSettings = { ...state.settings };
       state = normalizeState({ ...structuredClone(sampleState), ...response.data });
-      state.settings = { ...state.settings, ...currentSettings };
+      state.settings = {
+        ...state.settings,
+        ...currentSettings,
+        driveSyncUrl: HARDCODED_DRIVE_SYNC_URL || currentSettings.driveSyncUrl || state.settings.driveSyncUrl,
+        autoCloudSync: HARDCODED_DRIVE_SYNC_URL ? true : Boolean(currentSettings.autoCloudSync),
+      };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       render();
       setCloudStatus(`Loaded cloud data saved on ${response.savedAt || "Drive"}.`);
@@ -520,7 +556,7 @@ function loadCloudState() {
     }
   };
   script.onerror = () => {
-    setCloudStatus("Cloud load failed. Check the URL and Apps Script access.");
+    setCloudStatus("Cloud load failed. In Apps Script, deploy as Web app with access set to Anyone or Anyone in adissia.com, then use the /macros/s/.../exec URL.");
     script.remove();
     delete window[callbackName];
   };
@@ -1949,6 +1985,11 @@ function renderSettings() {
     syncField.readOnly = true;
     syncField.placeholder = "Cloud URL is built into this app";
   }
+  const autoField = document.querySelector("#autoCloudSync");
+  if (autoField && HARDCODED_DRIVE_SYNC_URL) {
+    autoField.checked = true;
+    autoField.disabled = true;
+  }
   renderProjectSettings();
   renderMetricSettings();
   renderTrackerColumnSettings();
@@ -2131,6 +2172,7 @@ function showLogin() {
 
 function showApp() {
   document.body.classList.remove("auth-locked");
+  setTimeout(startTeamCloudSync, 100);
 }
 
 function initLogin() {
@@ -2560,7 +2602,7 @@ function bindEvents() {
       state.settings[key] = numberValue(document.querySelector(`#${key}`).value);
     });
     state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
-    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
+    state.settings.autoCloudSync = HARDCODED_DRIVE_SYNC_URL ? true : document.querySelector("#autoCloudSync").checked;
     saveState();
     render();
   });
@@ -2569,18 +2611,18 @@ function bindEvents() {
     saveState();
   });
   document.querySelector("#autoCloudSync").addEventListener("change", (event) => {
-    state.settings.autoCloudSync = event.target.checked;
+    state.settings.autoCloudSync = HARDCODED_DRIVE_SYNC_URL ? true : event.target.checked;
     saveState();
   });
   document.querySelector("#saveCloudData").addEventListener("click", () => {
     state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
-    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
+    state.settings.autoCloudSync = HARDCODED_DRIVE_SYNC_URL ? true : document.querySelector("#autoCloudSync").checked;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     saveCloudState();
   });
   document.querySelector("#loadCloudData").addEventListener("click", () => {
     state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
-    state.settings.autoCloudSync = document.querySelector("#autoCloudSync").checked;
+    state.settings.autoCloudSync = HARDCODED_DRIVE_SYNC_URL ? true : document.querySelector("#autoCloudSync").checked;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     loadCloudState();
   });
