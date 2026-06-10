@@ -73,7 +73,7 @@ const importTemplates = {
   ],
   targetWeekly: ["Month", "Week", "Project", "Medium", "Spend", "Total Lead Achieved", "Digital Lead Achieved", "BTL Lead Achieved", "Lead Allocation", "Site Visit", "Booking"],
   portal: ["Date", "Portal", "Project", "Generated", "SVS", "SVC", "Generated Walk-in", "Gross Nos", "Net Nos"],
-  creatives: ["Date", "Project", "Campaign ID", "Campaign Name", "Ad Set Name", "Creative Name", "Creative Type", "Platform", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Status", "Remarks"],
+  creatives: ["Date", "Project", "Campaign ID", "Campaign Name", "Ad Set Name", "Creative Name", "Creative Type", "Image URL", "Platform", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Status", "Remarks"],
 };
 
 const sampleState = {
@@ -264,13 +264,49 @@ const sampleState = {
 let state = loadState();
 let saveStatusTimer;
 
+function emptyState(preserveUsers = []) {
+  const todayMonth = todayIso().slice(0, 7);
+  return {
+    ...structuredClone(sampleState),
+    filters: {
+      ...structuredClone(sampleState.filters),
+      project: "All Projects",
+      startDate: "",
+      endDate: "",
+      portalPeriod: "range",
+      portalStartDate: "",
+      portalEndDate: "",
+      creativeProject: "All Projects",
+      creativeCampaign: "All Campaigns",
+      creativeType: "All Types",
+      creativeStartDate: "",
+      creativeEndDate: "",
+    },
+    targetMonth: todayMonth,
+    targetWeek: "total",
+    targetProject: "All Projects",
+    targetView: "all",
+    targetSearch: "",
+    portalMonth: todayMonth,
+    portalProject: "All Projects",
+    portalFilter: "All Portals",
+    users: normalizeUsers(preserveUsers.length ? preserveUsers : [DEFAULT_ADMIN]),
+    projects: [],
+    campaigns: [],
+    changes: [],
+    targets: [],
+    portalRows: [],
+    creatives: [],
+  };
+}
+
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return normalizeState(structuredClone(sampleState));
+  if (!saved) return normalizeState(emptyState());
   try {
-    return normalizeState({ ...structuredClone(sampleState), ...JSON.parse(saved) });
+    return normalizeState({ ...emptyState(), ...JSON.parse(saved) });
   } catch {
-    return normalizeState(structuredClone(sampleState));
+    return normalizeState(emptyState());
   }
 }
 
@@ -434,6 +470,7 @@ function normalizeCreativeRow(row) {
     booked: numberValue(row.booked),
     status: row.status || "Testing",
     remarks: row.remarks || "",
+    imageUrl: row.imageUrl || row["Image URL"] || "",
     imageData: row.imageData || "",
   };
 }
@@ -585,7 +622,7 @@ function loadCloudState(options = {}) {
         }
         isLoadingCloud = true;
         const currentSettings = { ...state.settings };
-        state = normalizeState({ ...structuredClone(sampleState), ...response.data });
+        state = normalizeState({ ...emptyState(), ...response.data });
         state.settings = {
           ...state.settings,
           ...currentSettings,
@@ -1448,7 +1485,7 @@ function renderCreativeRows() {
   metrics.innerHTML = creativeMetricCards(rows, false);
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="19">No creative rows for this selection.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="20">No creative rows for this selection.</td></tr>`;
     return;
   }
   body.innerHTML = "";
@@ -1472,6 +1509,7 @@ function renderCreativeRows() {
       td(row.adsetName || "-", "calc-cell wide"),
       td(input(row.creativeName, "text", (value) => updateCreative(index, "creativeName", value)), "wide"),
       td(select(row.creativeType, ["Static", "Video", "Carousel", "Reel", "Story", "Banner", "Other"], (value) => updateCreative(index, "creativeType", value))),
+      td(input(row.imageUrl, "url", (value) => updateCreative(index, "imageUrl", value)), "wide image-url-cell"),
       td(select(row.platform, platformOptions, (value) => updateCreative(index, "platform", value))),
       td(input(row.spend, "number", (value) => updateCreative(index, "spend", value)), "number-cell"),
       td(input(row.impressions, "number", (value) => updateCreative(index, "impressions", value)), "number-cell"),
@@ -1516,7 +1554,7 @@ function renderCreativeDashboard() {
     attentionCards.innerHTML = `<div class="empty-state">No creative data for this selection.</div>`;
     typeSummary.innerHTML = `<div class="empty-state">No creative data for this selection.</div>`;
     platformSummary.innerHTML = `<div class="empty-state">No creative data for this selection.</div>`;
-    body.innerHTML = `<tr><td colspan="13">No creative rows for this selection.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="14">No creative rows for this selection.</td></tr>`;
     return;
   }
 
@@ -1545,6 +1583,7 @@ function renderCreativeDashboard() {
         <td>${row.campaignName || ""}</td>
         <td>${row.adsetName || ""}</td>
         <td>${row.creativeType || ""}</td>
+        <td>${creativeImageUrlLink(row)}</td>
         <td>${row.platform || ""}</td>
         <td class="number-cell">${money(stats.spend)}</td>
         <td class="number-cell">${money(stats.leads)}</td>
@@ -1559,8 +1598,9 @@ function renderCreativeDashboard() {
 }
 
 function creativeReportIdentity(row) {
-  const image = row.imageData
-    ? `<img class="creative-report-thumb" src="${row.imageData}" alt="">`
+  const imageSource = row.imageUrl || row.imageData;
+  const image = imageSource
+    ? `<img class="creative-report-thumb" src="${imageSource}" alt="">`
     : `<div class="creative-report-thumb creative-thumb-empty">No image</div>`;
   return `
     <div class="creative-report-identity">
@@ -1571,6 +1611,12 @@ function creativeReportIdentity(row) {
       </div>
     </div>
   `;
+}
+
+function creativeImageUrlLink(row) {
+  const url = row.imageUrl || "";
+  if (!url) return row.imageData ? "Uploaded image" : "-";
+  return `<a class="creative-url-link" href="${url}" target="_blank" rel="noopener">Open image</a>`;
 }
 
 function creativeReportCard(row) {
@@ -1617,10 +1663,11 @@ function creativeSummaryList(rows, key) {
 
 function creativeImageControl(row, index) {
   const wrap = el("div", "creative-upload");
-  if (row.imageData) {
+  const imageSource = row.imageUrl || row.imageData;
+  if (imageSource) {
     const img = document.createElement("img");
     img.className = "creative-thumb";
-    img.src = row.imageData;
+    img.src = imageSource;
     img.alt = row.creativeName || "Creative image";
     wrap.append(img);
   } else {
@@ -1633,13 +1680,14 @@ function creativeImageControl(row, index) {
   file.addEventListener("change", (event) => handleCreativeImage(index, event.target.files?.[0]));
   label.append(file);
   wrap.append(label);
-  if (row.imageData) {
+  if (row.imageData || row.imageUrl) {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ghost-light-button compact-action";
-    remove.textContent = "Remove";
+    remove.textContent = "Remove Image";
     remove.addEventListener("click", () => {
       state.creatives[index].imageData = "";
+      state.creatives[index].imageUrl = "";
       saveState();
       render();
     });
@@ -2481,7 +2529,7 @@ function setAuthMode(mode) {
   document.body.classList.toggle("auth-signup", isSignup);
   document.querySelector("#signinMode").classList.toggle("is-active", !isSignup);
   document.querySelector("#signupMode").classList.toggle("is-active", isSignup);
-  document.querySelector("#loginTitle").textContent = isSignup ? "Create account" : "Campaign Log";
+  document.querySelector("#loginTitle").textContent = isSignup ? "Create account" : "Performance Hub";
   document.querySelector("#loginCopy").textContent = isSignup
     ? "Sign up once on this browser, then use Sign in."
     : "Sign in to open your campaign dashboard.";
@@ -2892,9 +2940,12 @@ function bindEvents() {
     render();
   });
   document.querySelector("#resetData").addEventListener("click", () => {
-    if (!confirm("Restore sample data? Current browser data will be replaced.")) return;
-    state = structuredClone(sampleState);
+    if (!confirm("Reset all report data? Campaigns, targets, portal rows, creatives, and changes will be removed for everyone after cloud save.")) return;
+    state = normalizeState(emptyState(state.users));
     saveState();
+    saveCloudState();
+    showSaveStatus("All data reset");
+    setCloudStatus("Reset saved. Team data will be empty after cloud sync.");
     render();
   });
   document.querySelector("#saveSettings").addEventListener("click", () => {
@@ -2904,6 +2955,8 @@ function bindEvents() {
     state.settings.driveSyncUrl = HARDCODED_DRIVE_SYNC_URL || document.querySelector("#driveSyncUrl").value.trim();
     state.settings.autoCloudSync = HARDCODED_DRIVE_SYNC_URL ? true : document.querySelector("#autoCloudSync").checked;
     saveState();
+    showSaveStatus("Rules saved");
+    setCloudStatus("Settings saved.");
     render();
   });
   document.querySelector("#driveSyncUrl").addEventListener("change", (event) => {
@@ -2953,8 +3006,8 @@ function downloadImportTemplate() {
       ["2026-05-01", "Roof&floor", "One world", 0, 0, 0, 0, 0, 0],
     ],
     creatives: [
-      [todayIso(), "Main Project", "CMP-001", "Summer Lead Gen", "Core Lead Audience", "Blue Offer Static", "Static", "Meta", 1800, 42000, 710, 36, 12, 4, "Active", "Upload image after import"],
-      [todayIso(), "Main Project", "CMP-002", "Retargeting Sales", "Search Retargeting", "Walkthrough Video", "Video", "Google", 2600, 39000, 620, 28, 10, 3, "Testing", "Compare with static creative"],
+      [todayIso(), "Main Project", "CMP-001", "Summer Lead Gen", "Core Lead Audience", "Blue Offer Static", "Static", "https://example.com/creative-image.jpg", "Meta", 1800, 42000, 710, 36, 12, 4, "Active", "Upload image after import"],
+      [todayIso(), "Main Project", "CMP-002", "Retargeting Sales", "Search Retargeting", "Walkthrough Video", "Video", "", "Google", 2600, 39000, 620, 28, 10, 3, "Testing", "Compare with static creative"],
     ],
   };
   download(`${type}-import-template.csv`, [headers, ...exampleRows[type]]);
@@ -3237,6 +3290,7 @@ function importCreativeRows(records) {
       adsetName: matchedCampaign.adsetName,
       creativeName: record["Creative Name"] || "Creative",
       creativeType: record["Creative Type"] || record.Type || "Static",
+      imageUrl: record["Image URL"] || record.Image || record["Creative Image"] || "",
       platform: matchedCampaign.platform || record.Platform || "Meta",
       spend: record.Spend,
       impressions: record.Impressions,
@@ -3254,7 +3308,11 @@ function importCreativeRows(records) {
       item.adsetName === row.adsetName &&
       item.creativeName === row.creativeName
     ));
-    if (existingIndex >= 0) state.creatives[existingIndex] = { ...row, imageData: state.creatives[existingIndex].imageData || "" };
+    if (existingIndex >= 0) state.creatives[existingIndex] = {
+      ...row,
+      imageData: state.creatives[existingIndex].imageData || "",
+      imageUrl: row.imageUrl || state.creatives[existingIndex].imageUrl || "",
+    };
     else state.creatives.push(row);
     if (!state.projects.some((project) => project.name === row.project)) {
       state.projects.push({ name: row.project, adAccountId: "" });
@@ -3423,6 +3481,7 @@ function creativeExportRows() {
         row.adsetName,
         row.creativeName,
         row.creativeType,
+        row.imageUrl || "",
         row.platform,
         row.spend,
         row.impressions,
@@ -3437,7 +3496,7 @@ function creativeExportRows() {
         percent(stats.svcRate),
         percent(stats.bookedRate),
         stats.status,
-        row.imageData ? "Yes" : "No",
+        row.imageData || row.imageUrl ? "Yes" : "No",
       ];
     }),
   ];

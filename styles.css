@@ -1266,6 +1266,20 @@ textarea:focus {
   min-width: 150px;
 }
 
+.image-url-cell {
+  min-width: 260px;
+}
+
+.image-url-cell input {
+  min-width: 240px;
+}
+
+.creative-url-link {
+  color: var(--teal);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .creative-upload {
   display: grid;
   gap: 7px;
