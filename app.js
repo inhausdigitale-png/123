@@ -565,6 +565,21 @@ function isTeamCloudMode() {
   return Boolean(cleanCloudUrl());
 }
 
+function hasSharedData(data = state) {
+  const users = normalizeUsers(data.users || []);
+  const extraUsers = users.filter((user) => user.username !== DEFAULT_ADMIN.username);
+  return Boolean(
+    (data.campaigns || []).length ||
+    (data.changes || []).length ||
+    (data.targets || []).length ||
+    (data.portalRows || []).length ||
+    (data.creatives || []).length ||
+    (data.projects || []).length ||
+    extraUsers.length ||
+    data.settings?.lastResetAt
+  );
+}
+
 function canRefreshCloudNow() {
   const activeTag = document.activeElement?.tagName;
   return !["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
@@ -602,10 +617,14 @@ function scheduleCloudSave() {
   }, CLOUD_SYNC_DELAY);
 }
 
-async function saveCloudState() {
+async function saveCloudState(options = {}) {
   const url = cleanCloudUrl();
   if (!url) {
     setCloudStatus("Cloud URL is missing.");
+    return;
+  }
+  if (!options.allowEmpty && !hasSharedData(state)) {
+    setCloudStatus("Nothing to save yet. Add data first, or use Reset as admin to intentionally save an empty team file.");
     return;
   }
   const payload = {
@@ -643,7 +662,15 @@ function loadCloudState(options = {}) {
         if (!response?.ok) throw new Error(response?.error || "Cloud data could not be loaded");
         if (!response.data) {
           if (!options.silent) setCloudStatus("Cloud is empty. Creating the first shared team copy now...");
-          if (!options.skipSeed) saveCloudState();
+          if (!options.skipSeed && hasSharedData(state)) saveCloudState();
+          resolve(false);
+          return;
+        }
+        if (!hasSharedData(response.data) && hasSharedData(state) && !response.data?.settings?.lastResetAt) {
+          if (!options.silent) {
+            setCloudStatus("Cloud is empty, so your browser data was kept. Click Save Cloud Now to upload it for the team.");
+            showSaveStatus("Kept browser data");
+          }
           resolve(false);
           return;
         }
@@ -2598,6 +2625,12 @@ function initLogin() {
   showLogin();
 }
 
+async function preloadCloudDataOnOpen() {
+  if (!isTeamCloudMode() || hasLoadedCloudOnOpen) return;
+  const loaded = await loadCloudState({ silent: false, skipSeed: true });
+  if (loaded) hasLoadedCloudOnOpen = true;
+}
+
 function getUsers() {
   try {
     return JSON.parse(localStorage.getItem(USERS_KEY) || "{}");
@@ -3160,8 +3193,9 @@ function bindEvents() {
     }
     if (!confirm("Reset all report data? Campaigns, targets, portal rows, creatives, and changes will be removed for everyone after cloud save.")) return;
     state = normalizeState(emptyState(state.users));
+    state.settings.lastResetAt = new Date().toISOString();
     saveState();
-    saveCloudState();
+    saveCloudState({ allowEmpty: true });
     showSaveStatus("All data reset");
     setCloudStatus("Reset saved. Team data will be empty after cloud sync.");
     render();
@@ -3832,10 +3866,15 @@ function csvCell(value) {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-bindEvents();
-render();
-const params = new URLSearchParams(window.location.search);
-const requestedTab = params.get("tab");
-if (requestedTab) setActiveTab(requestedTab);
-else if (params.get("creative") === "1") setActiveTab("creativePerformance");
-initLogin();
+async function bootApp() {
+  bindEvents();
+  await preloadCloudDataOnOpen();
+  render();
+  const params = new URLSearchParams(window.location.search);
+  const requestedTab = params.get("tab");
+  if (requestedTab) setActiveTab(requestedTab);
+  else if (params.get("creative") === "1") setActiveTab("creativePerformance");
+  initLogin();
+}
+
+bootApp();
