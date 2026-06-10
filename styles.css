@@ -581,6 +581,14 @@ button {
   gap: 16px;
 }
 
+.health-summary {
+  margin-bottom: 16px;
+}
+
+.portal-health-grid {
+  margin: 12px 0 16px;
+}
+
 .portal-report-stack {
   grid-template-columns: 1fr;
 }
@@ -674,6 +682,17 @@ button {
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.tracker-filter-tools {
+  padding: 12px;
+  border: 1px solid #dce6dd;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f7fbf6);
+}
+
+.tracker-filter-tools input[type="search"] {
+  min-width: 230px;
 }
 
 .dropdown-control {
@@ -1134,6 +1153,13 @@ textarea:focus {
   background: #fff;
   color: var(--ink);
   padding: 8px;
+}
+
+.empty-row {
+  height: 72px;
+  color: var(--muted);
+  font-weight: 700;
+  text-align: center;
 }
 
 .target-note {

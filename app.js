@@ -89,6 +89,13 @@ const sampleState = {
     creativeType: "All Types",
     creativeStartDate: "",
     creativeEndDate: "",
+    trackerProject: "All Projects",
+    trackerStartDate: "",
+    trackerEndDate: "",
+    trackerPlatform: "All Platforms",
+    trackerStatus: "All Status",
+    trackerObjective: "All Objectives",
+    trackerSearch: "",
   },
   trackerColumns: structuredClone(defaultTrackerColumnIds),
   targetMonth: "2026-06",
@@ -273,6 +280,9 @@ function emptyState(preserveUsers = []) {
       project: "All Projects",
       startDate: "",
       endDate: "",
+      projectSummaryProject: "All Projects",
+      projectSummaryStartDate: "",
+      projectSummaryEndDate: "",
       portalPeriod: "range",
       portalStartDate: "",
       portalEndDate: "",
@@ -281,6 +291,13 @@ function emptyState(preserveUsers = []) {
       creativeType: "All Types",
       creativeStartDate: "",
       creativeEndDate: "",
+      trackerProject: "All Projects",
+      trackerStartDate: "",
+      trackerEndDate: "",
+      trackerPlatform: "All Platforms",
+      trackerStatus: "All Status",
+      trackerObjective: "All Objectives",
+      trackerSearch: "",
     },
     targetMonth: todayMonth,
     targetWeek: "total",
@@ -315,6 +332,9 @@ function normalizeState(nextState) {
     project: nextState.filters?.project || "All Projects",
     startDate: nextState.filters?.startDate || "",
     endDate: nextState.filters?.endDate || "",
+    projectSummaryProject: nextState.filters?.projectSummaryProject || "All Projects",
+    projectSummaryStartDate: nextState.filters?.projectSummaryStartDate || "",
+    projectSummaryEndDate: nextState.filters?.projectSummaryEndDate || "",
     portalPeriod: nextState.filters?.portalPeriod || "range",
     portalStartDate: nextState.filters?.portalStartDate || "",
     portalEndDate: nextState.filters?.portalEndDate || "",
@@ -323,6 +343,13 @@ function normalizeState(nextState) {
     creativeType: nextState.filters?.creativeType || "All Types",
     creativeStartDate: nextState.filters?.creativeStartDate || "",
     creativeEndDate: nextState.filters?.creativeEndDate || "",
+    trackerProject: nextState.filters?.trackerProject || "All Projects",
+    trackerStartDate: nextState.filters?.trackerStartDate || "",
+    trackerEndDate: nextState.filters?.trackerEndDate || "",
+    trackerPlatform: nextState.filters?.trackerPlatform || "All Platforms",
+    trackerStatus: nextState.filters?.trackerStatus || "All Status",
+    trackerObjective: nextState.filters?.trackerObjective || "All Objectives",
+    trackerSearch: nextState.filters?.trackerSearch || "",
   };
   nextState.trackerColumns = Array.isArray(nextState.trackerColumns) && nextState.trackerColumns.length
     ? nextState.trackerColumns.filter((id) => defaultTrackerColumnIds.includes(id) || id.startsWith("metric:"))
@@ -702,8 +729,25 @@ function inPortalDashboardDateRange(dateString) {
   return true;
 }
 
+function inProjectSummaryDateRange(dateString) {
+  const start = state.filters?.projectSummaryStartDate || "";
+  const end = state.filters?.projectSummaryEndDate || "";
+  if (!start && !end) return true;
+  if (!dateString) return false;
+  if (start && dateString < start) return false;
+  if (end && dateString > end) return false;
+  return true;
+}
+
 function matchesProject(row) {
   const project = state.filters?.project || "All Projects";
+  const rowProject = row.project || campaignProject(row.campaignId);
+  if (!canAccessProject(rowProject)) return false;
+  return project === "All Projects" || rowProject === project;
+}
+
+function matchesProjectSummary(row) {
+  const project = state.filters?.projectSummaryProject || "All Projects";
   const rowProject = row.project || campaignProject(row.campaignId);
   if (!canAccessProject(rowProject)) return false;
   return project === "All Projects" || rowProject === project;
@@ -760,6 +804,39 @@ function latestCampaignStatus(campaignId, fallback = "Active") {
     .sort((a, b) => a.date.localeCompare(b.date))
     .at(-1);
   return latest?.campaignStatus || fallback || "Active";
+}
+
+function trackerFilterOptions() {
+  const rows = state.campaigns.filter(canAccessRow);
+  const unique = (items) => [...new Set(items.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return {
+    projects: ["All Projects", ...unique(rows.map((row) => row.project))],
+    platforms: ["All Platforms", ...unique(rows.map((row) => row.platform))],
+    statuses: ["All Status", ...unique(rows.map((row) => latestCampaignStatus(row.id, row.status)))],
+    objectives: ["All Objectives", ...unique(rows.map((row) => row.objective))],
+  };
+}
+
+function visibleTrackerRows() {
+  const filters = state.filters || {};
+  const search = (filters.trackerSearch || "").trim().toLowerCase();
+  return state.campaigns.filter(canAccessRow).filter((row) => {
+    const status = latestCampaignStatus(row.id, row.status);
+    if (filters.trackerProject !== "All Projects" && row.project !== filters.trackerProject) return false;
+    if (filters.trackerPlatform !== "All Platforms" && row.platform !== filters.trackerPlatform) return false;
+    if (filters.trackerStatus !== "All Status" && status !== filters.trackerStatus) return false;
+    if (filters.trackerObjective !== "All Objectives" && row.objective !== filters.trackerObjective) return false;
+    if (filters.trackerStartDate && row.date < filters.trackerStartDate) return false;
+    if (filters.trackerEndDate && row.date > filters.trackerEndDate) return false;
+    if (search) {
+      const text = [
+        row.date, row.project, row.id, row.name, row.adsetName, row.platform, row.placement, row.country,
+        row.age, row.device, row.objective, status, row.metric,
+      ].join(" ").toLowerCase();
+      if (!text.includes(search)) return false;
+    }
+    return true;
+  });
 }
 
 function calcCampaign(row) {
@@ -1034,11 +1111,45 @@ function visibleTrackerColumns(row, index, calc) {
   return trackerColumnDefinitions(row, index, calc).filter((column) => selected.has(column.id));
 }
 
+function syncTrackerFilters() {
+  const options = trackerFilterOptions();
+  const setSelect = (selector, values, fallback) => {
+    const selectEl = document.querySelector(selector);
+    if (!selectEl) return;
+    const current = state.filters?.[selectEl.id] || fallback;
+    selectEl.innerHTML = values.map((item) => `<option value="${item}">${item}</option>`).join("");
+    if (!values.includes(current)) state.filters[selectEl.id] = fallback;
+    selectEl.value = values.includes(current) ? current : fallback;
+  };
+  setSelect("#trackerProject", options.projects, "All Projects");
+  setSelect("#trackerPlatform", options.platforms, "All Platforms");
+  setSelect("#trackerStatus", options.statuses, "All Status");
+  setSelect("#trackerObjective", options.objectives, "All Objectives");
+
+  const start = document.querySelector("#trackerStart");
+  const end = document.querySelector("#trackerEnd");
+  const search = document.querySelector("#trackerSearch");
+  if (start && document.activeElement !== start) start.value = state.filters?.trackerStartDate || "";
+  if (end && document.activeElement !== end) end.value = state.filters?.trackerEndDate || "";
+  if (search && document.activeElement !== search) search.value = state.filters?.trackerSearch || "";
+}
+
 function renderCampaignRows() {
+  syncTrackerFilters();
   renderCampaignHeaders();
   const body = document.querySelector("#campaignRows");
   body.innerHTML = "";
-  state.campaigns.filter(canAccessRow).forEach((row) => {
+  const rows = visibleTrackerRows();
+  if (!rows.length) {
+    const colCount = (state.trackerColumns || defaultTrackerColumnIds).length + 1;
+    const tr = document.createElement("tr");
+    const cell = td("No campaign rows for this tracker filter.", "empty-row");
+    cell.colSpan = colCount;
+    tr.append(cell);
+    body.append(tr);
+    return;
+  }
+  rows.forEach((row) => {
     const index = state.campaigns.indexOf(row);
     const calc = calcCampaign(row);
     const tr = document.createElement("tr");
@@ -1055,7 +1166,7 @@ function renderCampaignRows() {
 function renderCampaignHeaders() {
   const row = document.querySelector("#campaignHeaderRow");
   if (!row) return;
-  const sample = state.campaigns[0] || {};
+  const sample = visibleTrackerRows()[0] || state.campaigns[0] || {};
   const headers = visibleTrackerColumns(sample, 0, calcCampaign(sample)).map((column) => column.label);
   row.innerHTML = headers.map((label) => `<th>${label}</th>`).join("") + "<th></th>";
 }
@@ -1835,6 +1946,10 @@ function renderDashboard() {
   const bookedRate = totals.svc ? totals.booked / totals.svc : 0;
   const projectCount = new Set(campaignRows.map((row) => row.project).filter(Boolean)).size;
   const portalDashboardTotal = portalTotals(portalDashboardRows);
+  const portalProjectCount = new Set(portalDashboardRows.map((row) => row.project).filter(Boolean)).size;
+  const portalCount = new Set(portalDashboardRows.map((row) => row.portal).filter(Boolean)).size;
+  const portalDayCount = new Set(portalDashboardRows.map((row) => row.date).filter(Boolean)).size;
+  const portalSvcRate = portalDashboardTotal.generated ? portalDashboardTotal.svc / portalDashboardTotal.generated : 0;
 
   const metrics = [
     ["Projects", projectCount],
@@ -1848,14 +1963,28 @@ function renderDashboard() {
     ["Avg CPA / CPL", money(avgCpa)],
     ["Need Action", totals.needsAction],
     ["Reviews Due", due],
-    ["Portal Generated", money(portalDashboardTotal.generated)],
-    ["Portal SVC", money(portalDashboardTotal.svc)],
-    ["Portal Gross Nos", money(portalDashboardTotal.gross)],
-    ["Portal Net Nos", money(portalDashboardTotal.net)],
   ];
   document.querySelector("#metricGrid").innerHTML = metrics
     .map((item) => `<article class="metric"><span>${item[0]}</span><strong>${item[1]}</strong></article>`)
     .join("");
+  const portalMetrics = [
+    ["Portal Projects", portalProjectCount],
+    ["Portals", portalCount],
+    ["Days", portalDayCount],
+    ["Generated", money(portalDashboardTotal.generated)],
+    ["SVS", money(portalDashboardTotal.svs)],
+    ["SVC", money(portalDashboardTotal.svc)],
+    ["SVC %", percent(portalSvcRate)],
+    ["Walk-in", money(portalDashboardTotal.walkin)],
+    ["Gross Nos", money(portalDashboardTotal.gross)],
+    ["Net Nos", money(portalDashboardTotal.net)],
+  ];
+  const portalMetricGrid = document.querySelector("#portalMetricGrid");
+  if (portalMetricGrid) {
+    portalMetricGrid.innerHTML = portalMetrics
+      .map((item) => `<article class="metric"><span>${item[0]}</span><strong>${item[1]}</strong></article>`)
+      .join("");
+  }
 
   renderBars("#decisionBars", [
     ["Good", totals.good, "var(--green)"],
@@ -1877,7 +2006,10 @@ function renderDashboard() {
     ["Critical", totals.performance.Critical || 0, "var(--red)"],
     ["Waiting / Watch", (totals.performance.Waiting || 0) + (totals.performance.Watch || 0), "var(--amber)"],
   ]);
-  renderProjectSummary(dateCampaignRows);
+  const projectSummaryRows = state.campaigns
+    .filter((row) => inProjectSummaryDateRange(row.date))
+    .filter(matchesProjectSummary);
+  renderProjectSummary(projectSummaryRows);
   renderPortalDashboardSummary(portalDashboardRows);
 }
 
@@ -2386,17 +2518,27 @@ function renderFilters() {
   const start = document.querySelector("#filterStart");
   const end = document.querySelector("#filterEnd");
   const project = document.querySelector("#filterProject");
+  const summaryProject = document.querySelector("#projectSummaryProject");
+  const summaryStart = document.querySelector("#projectSummaryStart");
+  const summaryEnd = document.querySelector("#projectSummaryEnd");
   const portalPeriod = document.querySelector("#portalDashboardPeriod");
   const portalStart = document.querySelector("#portalDashboardStart");
   const portalEnd = document.querySelector("#portalDashboardEnd");
+  const projects = ["All Projects", ...projectOptions()];
   if (project) {
     const current = state.filters?.project || "All Projects";
-    const projects = ["All Projects", ...projectOptions()];
     project.innerHTML = projects.map((item) => `<option value="${item}">${item}</option>`).join("");
     project.value = projects.includes(current) ? current : "All Projects";
   }
+  if (summaryProject) {
+    const current = state.filters?.projectSummaryProject || "All Projects";
+    summaryProject.innerHTML = projects.map((item) => `<option value="${item}">${item}</option>`).join("");
+    summaryProject.value = projects.includes(current) ? current : "All Projects";
+  }
   if (start && document.activeElement !== start) start.value = state.filters?.startDate || "";
   if (end && document.activeElement !== end) end.value = state.filters?.endDate || "";
+  if (summaryStart && document.activeElement !== summaryStart) summaryStart.value = state.filters?.projectSummaryStartDate || "";
+  if (summaryEnd && document.activeElement !== summaryEnd) summaryEnd.value = state.filters?.projectSummaryEndDate || "";
   if (portalPeriod && document.activeElement !== portalPeriod) portalPeriod.value = state.filters?.portalPeriod || "range";
   if (portalStart && document.activeElement !== portalStart) portalStart.value = state.filters?.portalStartDate || "";
   if (portalEnd && document.activeElement !== portalEnd) portalEnd.value = state.filters?.portalEndDate || "";
@@ -2681,9 +2823,13 @@ function addPortalRow() {
 }
 
 function resetPortalRows() {
+  if (!isAdminUser()) {
+    showSaveStatus("Admin only");
+    return;
+  }
   if (!confirm("Reset only Portal Report data? Campaign Tracker and Change Log will not change.")) return;
-  state.portalRows = structuredClone(sampleState.portalRows).map((row) => normalizePortalRow(row));
-  state.portalMonth = sampleState.portalMonth;
+  state.portalRows = [];
+  state.portalMonth = todayIso().slice(0, 7);
   state.portalProject = "All Projects";
   state.portalFilter = "All Portals";
   saveState();
@@ -2843,6 +2989,28 @@ function bindEvents() {
     saveState();
     render();
   });
+  document.querySelector("#projectSummaryProject").addEventListener("change", (event) => {
+    state.filters.projectSummaryProject = event.target.value || "All Projects";
+    saveState();
+    render();
+  });
+  document.querySelector("#projectSummaryStart").addEventListener("change", (event) => {
+    state.filters.projectSummaryStartDate = event.target.value;
+    saveState();
+    render();
+  });
+  document.querySelector("#projectSummaryEnd").addEventListener("change", (event) => {
+    state.filters.projectSummaryEndDate = event.target.value;
+    saveState();
+    render();
+  });
+  document.querySelector("#clearProjectSummaryRange").addEventListener("click", () => {
+    state.filters.projectSummaryProject = "All Projects";
+    state.filters.projectSummaryStartDate = "";
+    state.filters.projectSummaryEndDate = "";
+    saveState();
+    render();
+  });
   document.querySelector("#portalDashboardPeriod").addEventListener("change", (event) => {
     state.filters.portalPeriod = event.target.value || "range";
     saveState();
@@ -2939,7 +3107,57 @@ function bindEvents() {
     saveState();
     render();
   });
+  document.querySelector("#trackerProject")?.addEventListener("change", (event) => {
+    state.filters.trackerProject = event.target.value || "All Projects";
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerStart")?.addEventListener("change", (event) => {
+    state.filters.trackerStartDate = event.target.value;
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerEnd")?.addEventListener("change", (event) => {
+    state.filters.trackerEndDate = event.target.value;
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerPlatform")?.addEventListener("change", (event) => {
+    state.filters.trackerPlatform = event.target.value || "All Platforms";
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerStatus")?.addEventListener("change", (event) => {
+    state.filters.trackerStatus = event.target.value || "All Status";
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerObjective")?.addEventListener("change", (event) => {
+    state.filters.trackerObjective = event.target.value || "All Objectives";
+    saveState();
+    render();
+  });
+  document.querySelector("#trackerSearch")?.addEventListener("input", (event) => {
+    state.filters.trackerSearch = event.target.value;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    renderCampaignRows();
+  });
+  document.querySelector("#clearTrackerFilters")?.addEventListener("click", () => {
+    state.filters.trackerProject = "All Projects";
+    state.filters.trackerStartDate = "";
+    state.filters.trackerEndDate = "";
+    state.filters.trackerPlatform = "All Platforms";
+    state.filters.trackerStatus = "All Status";
+    state.filters.trackerObjective = "All Objectives";
+    state.filters.trackerSearch = "";
+    saveState();
+    render();
+  });
   document.querySelector("#resetData").addEventListener("click", () => {
+    if (!isAdminUser()) {
+      showSaveStatus("Admin only");
+      return;
+    }
     if (!confirm("Reset all report data? Campaigns, targets, portal rows, creatives, and changes will be removed for everyone after cloud save.")) return;
     state = normalizeState(emptyState(state.users));
     saveState();
@@ -3376,7 +3594,7 @@ function parseCsv(text) {
 function campaignTrackerExportRows() {
   return [
     ["Date", "Project", "Ad Account ID", "Campaign ID", "Name", "Ad Set Name", "Platform", "Placement", "Country", "Age", "Device", "Objective", "Status", "Last Edited", "Last Change", "Metric", "Before Value", "After Value", "Budget", "Spend", "Impressions", "Clicks", "Leads", "SVC", "Booked", "Revenue", "CTR", "CVR", "SVC %", "Booked %", "CPA/CPL", "ROAS", "Flag", "Performance"],
-    ...state.campaigns.filter(canAccessRow).map((row) => {
+    ...visibleTrackerRows().map((row) => {
       const calc = calcCampaign(row);
       return [row.date, row.project, adAccountForProject(row.project), row.id, row.name, row.adsetName, row.platform, row.placement, row.country, row.age, row.device, row.objective, latestCampaignStatus(row.id, row.status), latestChangeDate(row.id), latestChangeText(row.id), row.metric || "CPA/CPL", row.before, row.after, row.budget, row.spend, row.impressions, row.clicks, calc.leads, calc.svc, calc.booked, row.revenue, percent(calc.ctr), percent(calc.cvr), percent(calc.svcRate), percent(calc.bookedRate), calc.cpa.toFixed(2), calc.roas.toFixed(2), calc.flag, calc.performance];
     }),

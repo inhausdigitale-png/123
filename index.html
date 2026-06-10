@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Performance Hub</title>
-    <link rel="stylesheet" href="styles.css?v=20260610-creative-image-url-1" />
+    <link rel="stylesheet" href="styles.css?v=20260610-tracker-filters-1" />
   </head>
   <body class="auth-locked">
     <section class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
@@ -57,7 +57,7 @@
           <span aria-hidden="true">↓</span>
           Export
         </button>
-        <button class="danger-button" id="resetData" type="button" title="Clear all report data">
+        <button class="danger-button admin-only" id="resetData" type="button" title="Clear all report data">
           Reset
         </button>
         <button class="ghost-button" id="logoutButton" type="button" title="Close dashboard">
@@ -110,12 +110,35 @@
           </div>
         </div>
 
-        <div class="metric-grid" id="metricGrid"></div>
+        <section class="work-surface health-summary">
+          <div class="surface-head">
+            <div>
+              <h3>Campaign Health</h3>
+              <span>Project count, spend, leads, SVC, booked, and review status</span>
+            </div>
+          </div>
+          <div class="metric-grid" id="metricGrid"></div>
+        </section>
 
         <section class="work-surface project-summary">
           <div class="surface-head">
-            <h3>Project Wise Summary</h3>
-            <span>Filtered by selected date range</span>
+            <div>
+              <h3>Project Wise Summary</h3>
+              <span>Filtered by project and date range</span>
+            </div>
+            <label class="inline-filter">
+              Project
+              <select id="projectSummaryProject"></select>
+            </label>
+            <label class="inline-filter">
+              Summary From
+              <input id="projectSummaryStart" type="date" />
+            </label>
+            <label class="inline-filter">
+              Summary To
+              <input id="projectSummaryEnd" type="date" />
+            </label>
+            <button class="ghost-light-button" id="clearProjectSummaryRange" type="button">Clear Summary</button>
           </div>
           <div class="table-wrap compact-table">
             <table>
@@ -164,6 +187,7 @@
             </label>
             <button class="ghost-light-button" id="clearPortalDashboardRange" type="button">Clear Portal Dates</button>
           </div>
+          <div class="metric-grid compact-metric-grid portal-health-grid" id="portalMetricGrid"></div>
           <div class="table-wrap compact-table">
             <table>
               <thead id="portalDashboardHead">
@@ -212,6 +236,37 @@
             <h2 id="trackerTitle">Campaign Tracker</h2>
           </div>
           <button class="primary-button" id="addCampaign" type="button">Add Campaign Row</button>
+        </div>
+        <div class="target-tools tracker-filter-tools">
+          <label>
+            Project
+            <select id="trackerProject"></select>
+          </label>
+          <label>
+            From
+            <input id="trackerStart" type="date" />
+          </label>
+          <label>
+            To
+            <input id="trackerEnd" type="date" />
+          </label>
+          <label>
+            Platform
+            <select id="trackerPlatform"></select>
+          </label>
+          <label>
+            Status
+            <select id="trackerStatus"></select>
+          </label>
+          <label>
+            Objective
+            <select id="trackerObjective"></select>
+          </label>
+          <label>
+            Search
+            <input id="trackerSearch" type="search" placeholder="Campaign, ID, ad set" />
+          </label>
+          <button class="ghost-light-button" id="clearTrackerFilters" type="button">Clear Tracker</button>
         </div>
         <div class="tracker-toolbar">
           <details class="dropdown-control">
@@ -316,7 +371,7 @@
           </div>
           <div class="button-row">
             <button class="primary-button" id="addPortalRow" type="button">Add Portal Row</button>
-            <button class="danger-button" id="resetPortalRows" type="button">Reset Portal</button>
+            <button class="danger-button admin-only" id="resetPortalRows" type="button">Reset Portal</button>
           </div>
         </div>
         <div class="target-tools">
@@ -759,6 +814,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=20260610-creative-image-url-1"></script>
+    <script src="app.js?v=20260610-admin-reset-1"></script>
   </body>
 </html>
